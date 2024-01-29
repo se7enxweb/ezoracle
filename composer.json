@@ -1,0 +1,23 @@
+{
+    "name": "se7enxweb/ezoracle",
+    "description": "Database driver for eZ Publish CMS to use Oracle for a database backend",
+    "type": "ezpublish-legacy-extension",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "7x",
+            "email": "info@se7enx.com"
+        },
+        {
+            "name": "eZ Publish dev-team & eZ Community",
+            "homepage": "https://github.com/se7enxweb/ezwebin-extension"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "se7enxweb/ezpublish-legacy-installer": "*"
+    },
+    "extra": {
+        "ezpublish-legacy-extension-name": "ezoracle"
+    }
+}
