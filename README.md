@@ -1,79 +1,77 @@
-# eZ Oracle
+# ezoracle: Oracle database driver for Exponential
 
-# What is the eZ Oracle extension?
+## What is the ezoracle extension?
 
-This extension adds support for the Oracle database to eZ Publish by
-plugging into the database framework. After it is installed you can
-connect to any Oracle database that fits the minimum requirements.
+This extension adds support for the Oracle database to Exponential by
+plugging into its database framework: the driver `eZOracleDB`, the schema
+handler `eZOracleSchema`, console commands for maintaining the database, and
+cronjobs. After it is installed an Exponential site can run on Oracle, and the
+setup wizard, the kickstarter and `exp:install --db=oracle` can install onto it.
 
+## Version
 
-# eZ Oracle version
+The current version is 2.3.1. The changes of this version are in
+[doc/changelogs/2.3.1.md](doc/changelogs/2.3.1.md), older ones in doc/changelogs/.
 
-The current version of eZ Oracle is [EXTENSION_VERSION].
-You can find details about changes for this version in doc/changelogs/CHANGELOG-[EXTENSION_VERSION]
+## License
 
+GNU General Public License v2.0 (or any later version). The complete license
+is in the LICENSE file.
 
-# License
+## Requirements
 
-This software is licensed under the [EXTENSION_LICENSE]. The complete
-license agreement is included in the LICENSE file. For more information
-or questions please contact info@ez.no
+- **Exponential** 6.0.15 or later. Earlier versions do not offer Oracle in the
+  setup and installer.
+- **PHP** 8.0 to 8.5 with the **oci8** extension (PECL oci8 3.4 for PHP 8.4/8.5,
+  3.2 for 8.1-8.3), built against an Oracle client (the Instant Client is enough).
+- **Oracle Database** 19c or later. Tested with Oracle AI Database 26ai Free
+  (23.26). The driver uses features from 12.1 (STANDARD_HASH, OFFSET/FETCH);
+  11g and older are not supported.
+- A database character set of **AL32UTF8** (Unicode).
+- An Oracle user that may create sessions, tables, views, triggers,
+  sequences and procedures (bin/php/ora-grant.php prints the SQL). The health
+  and report commands read V$ views with SELECT_CATALOG_ROLE when it is granted.
 
+## Installation
 
-# Requirements
+See [INSTALL](INSTALL): installation, configuration, the settings reference of
+every feature, the console commands and the cronjobs.
 
-The following requirements exists for using eZ Oracle extension:
+## Features
 
-o  eZ Publish version:
+- Connection resilience: persistent connections, DRCP (pooled servers),
+  Easy Connect / TNS alias / descriptor connect strings, failover and load
+  balancing over several hosts, connect retries with back-off, reconnect and
+  read retry after a lost connection, a call timeout, and a keep-alive for long
+  running processes (Velocity workers, CLI scripts) that survives a database restart.
+- Performance: server-side OFFSET/FETCH for limits, row and LOB prefetch,
+  one dictionary query per schema read.
+- Tracing: client identifier, module, action and client info per request in
+  V$SESSION (siteaccess, module/view, user), for DBAs and AWR/ASH reports.
+- Observability: a slow query log with masked literals and bind values,
+  statement counts in the debug output.
+- Options for Oracle's semantics: '' as NULL (`OracleEmptyStringForNull`),
+  case-insensitive comparison and sorting (`OracleCaseInsensitive`) with a
+  helper for linguistic indexes.
+- Console commands (`./bin/php/console ext:ezoracle:<name>`): health,
+  gather-stats, recompile, purge-recyclebin, sequence-sync, schema-diff,
+  indexes, report, datapump, ci-indexes.
+- Cronjobs (off by default): nightly statistics, a health monitor that logs and
+  mails, recycle bin purge, sequence check.
+- DFS clustering backend for Oracle (eZDFSFileHandlerOracleBackend).
 
-   Make sure you eZ Publish version [EXTENSION_PUBLISH_VERSION] or higher, earlier
-   versions will not work correctly with this extension.
+## Planned
 
-o  Oracle version:
+Not in this release, as they could not be tested yet:
 
-   Make sure you have Oracle 9, 10 or 11 (client and server).
+- External authentication (Oracle wallet / OS authentication, `OCI_CRED_EXT`).
+- Transparent Application Continuity and FAN events.
+- Identity columns instead of sequences and triggers on 23ai and later.
 
-   If the Oracle server version is less than 9.2, setting the environment
-   variable NLS_LANG is mandatory to indicate that php expects to receive
-   data from the database in the UTF8 character set.
+## Upgrading
 
-o  PHP with Oracle support:
+From 2.3.0: see "Upgrading" in [doc/changelogs/2.3.1.md](doc/changelogs/2.3.1.md).
 
-   Make sure your PHP installation has compiled in support for Oracle. To
-   compile this you will need the Oracle client libraries and headers.
-   The standard windows version of php includes the dll needed for oracle support
-   (but the oracle client is still neded).
+## Troubleshooting
 
-o  Oracle user with correct permissions:
-
-   Make sure you have a user on the oracle server that can create the
-   following elements: session, table, trigger, sequence and procedure.
-
-
-# Installation
-
-Please read the [INSTALL](INSTALL) file for installation instructions.
-
-# Upgrading
-
-Please read the online documentation at [Upgrading](https://doc.ezpublishlegacy.se7enx.com/Extensions/eZ-Publish-extensions/eZ-Publish-Extension-for-Oracle-R-database/5.0/Installation/Upgrading) for detailed upgrade instructions from previous versions.
-
-# Clustering
-
-Please read the online documentation at
-[Clustering](https://doc.ezpublishlegacy.se7enx.com/Extensions/eZ-Publish-extensions/eZ-Publish-Extension-for-Oracle-R-database/2.0/Clustering.html) for detailed information on setting up an eZ Publish clustering configuration using an Oracle database.
-
-# Troubleshooting
-
-1. Read the FAQ
-   ------------
-
-   Some problems are more common than others. The most common ones are listed
-   in the FAQ.
-
-2. Support
-   -------
-
-   If you have find any problems not handled by this document or the FAQ you
-   can contact eZ system trough the support system:
-   https://se7enx.com/contact
+Read the [FAQ](FAQ) first. Problems and questions: https://github.com/se7enxweb/ezoracle/issues

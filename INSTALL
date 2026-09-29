@@ -296,27 +296,252 @@ EOF
                --insert-types=all \
                --schema-file=database.dba database.dba <instance>
 
-Configuring eZ Publish
-======================
+Configuring Exponential
+=======================
 
-1. Changing eZ Publish database handler
+1. Installing a new site on Oracle
+   -------------------------------
 
-   Before eZ Publish will start using the Oracle database, the current
-   database handler must be changed.
+   With the extension in extension/ezoracle and oci8 loaded, the installers
+   offer Oracle (Exponential 6.0.15 or later) and activate the extension for
+   the new site:
 
-   Edit your settings/override/site.ini.append.php and make sure the
-   DatabaseSettings section contains the following information:
+   $ EXP_INSTALL_DB_PASSWORD=<password> ./bin/php/console exp:install \
+         --db=oracle --db-host=127.0.0.1 --db-port=1521 --db-name=FREEPDB1 \
+         --db-user=<user>
+
+   --db-name is the service name (host:port/service is built from it); a full
+   connect string or @<tns-alias> is used as it is. For the kickstarter set
+   [database_choice] Type=oracle and Database=<connect string> in
+   [database_init] and [site_details] (see kickstart.ini-dist).
+
+2. Changing the database handler of an existing site
+   -------------------------------------------------
+
+   Edit settings/override/site.ini.append.php:
 
 ##################################
 [DatabaseSettings]
 DatabaseImplementation=ezoracle
 User=<user>
 Password=<password>
-Database=<instance>
+# the Oracle connect string: Easy Connect host:port/service_name,
+# Easy Connect Plus tcp://host:port/service?connect_timeout=5, a TNS alias,
+# or a full (DESCRIPTION=...) descriptor. Server and Port are not used.
+Database=127.0.0.1:1521/FREEPDB1
+Charset=utf-8
+
+[ExtensionSettings]
+ActiveExtensions[]=ezoracle
 ##################################
 
-   You must replace `<user>' `<password>' and `<instance>' with the user and
-   instance you use to connect to Oracle.
+   then regenerate the autoloads: php bin/php/ezpgenerateautoloads.php -e
+
+3. Environment
+   -----------
+
+   ORACLE_HOME is not needed with the Instant Client. NLS_LANG is not needed:
+   the driver connects in AL32UTF8 (the charset of Charset=utf-8, and the
+   default). LD_LIBRARY_PATH is needed only for a client outside the system
+   library path; set it (and TNS_ADMIN, if TNS aliases are used) in the PHP-FPM
+   pool (env[...]) and in Velocity's environment as well.
+
+   oci8 settings that only php.ini can set: oci8.statement_cache_size
+   (statement cache, default 20), oci8.default_prefetch, oci8.prefetch_lob_size,
+   oci8.ping_interval, oci8.persistent_timeout and oci8.max_persistent.
+
+Settings reference
+==================
+
+   Every feature below is off by default. The driver's own settings are in
+   extension/ezoracle/settings/ezoracle.ini; override them in
+   settings/override/ezoracle.ini.append.php (or per siteaccess). Two options
+   of Oracle's semantics are in site.ini [DatabaseSettings]. After changing INI
+   files clear the INI cache: php bin/php/ezcache.php --clear-tag=ini
+
+1. Empty string and NULL (site.ini [DatabaseSettings])
+   ----------------------------------------------------
+
+   Oracle stores '' as NULL. The schema handler makes text columns nullable
+   on Oracle, so the empty strings Exponential writes are accepted.
+
+   OracleEmptyStringForNull=disabled   (default) NULL comes back as Oracle has it
+   OracleEmptyStringForNull=enabled    NULL in CHAR/VARCHAR2/CLOB columns comes
+                                       back as '', as the other databases return
+                                       the empty strings that were written; real
+                                       NULLs in text columns then read as '' too.
+                                       Numeric columns always keep NULL.
+
+2. Case-insensitive comparisons (site.ini [DatabaseSettings])
+   ----------------------------------------------------------
+
+   Oracle compares strings binary and case sensitive; MySQL's *_ci collations
+   do not (logins, identifiers, sorted lists).
+
+   OracleCaseInsensitive=enabled
+   OracleCaseInsensitiveSort=BINARY_CI     (BINARY_AI ignores accents too, or any
+                                            linguistic sort name, e.g. GERMAN_CI)
+
+   Every session then runs ALTER SESSION SET NLS_COMP=LINGUISTIC
+   NLS_SORT=<sort>. Index implications: a plain index is no longer used for =,
+   LIKE, IN or ORDER BY on a string column; queries on such columns scan the
+   table unless there is a linguistic index on NLSSORT( column,
+   'NLS_SORT=<sort>' ). Create them for the columns Exponential compares with
+
+   $ ./bin/php/console ext:ezoracle:ci-indexes --create -s <siteaccess>
+
+   (the columns are ezoracle.ini [CaseInsensitiveSettings] Columns[]; --drop
+   removes them, without an option they are listed). Unique constraints stay
+   binary: two logins that differ only in case can still both exist.
+
+3. Connection ([ConnectionSettings] in ezoracle.ini)
+   -------------------------------------------------
+
+   Persistent=inherit|enabled|disabled   oci_pconnect; inherit follows site.ini
+                                         UsePersistentConnection
+   DRCP=enabled                          pooled servers: :POOLED is appended to an
+                                         Easy Connect string, SERVER=POOLED to a
+                                         built descriptor; for a TNS alias put
+                                         (SERVER=POOLED) into tnsnames.ora. The pool
+                                         must be started in the database:
+                                         EXECUTE DBMS_CONNECTION_POOL.START_POOL
+   ConnectionClass=EXPONENTIAL           oci8.connection_class for DRCP
+   ConnectString=                        instead of site.ini Database
+   TnsAdmin=/etc/oracle                  directory of tnsnames.ora/sqlnet.ora. The
+                                         client reads it once per process: the
+                                         environment (FPM pool, Velocity) is the
+                                         surer place
+   Edition=                              edition-based redefinition
+
+   Failover and load balancing over several listeners (a descriptor is built
+   when Hosts[] and ServiceName are set and ConnectString is empty):
+
+##################################
+[ConnectionSettings]
+Hosts[]
+Hosts[]=db1.example.com:1521
+Hosts[]=db2.example.com:1521
+ServiceName=EXPPRD
+Failover=enabled
+LoadBalance=disabled
+ConnectTimeout=5
+##################################
+
+   Retries and lost connections:
+
+   RetryCount=3, RetryDelay=1, RetryBackoff=2
+                  3 more attempts after 1, 2 and 4 seconds (site.ini
+                  ConnectRetries when RetryCount is not set)
+   ReconnectErrors[]=3113 ...
+                  the ORA- numbers that mean a lost or unreachable connection
+                  (the shipped list covers ORA-00028, 01012, 01033, 01034, 01089,
+                  03113, 03114, 03135, 12153, 12170, 12514, 12528, 12537, 12541,
+                  12543, 12545, 12547, 12570, 25408). On one of them outside a
+                  transaction the driver reconnects; a read (SELECT, WITH) is run
+                  again on the new connection (RetryReads=enabled), a write is
+                  reported, as it may have been carried out before the connection
+                  broke. Inside a transaction the error is raised as before: the
+                  transaction's work is lost with the session.
+   CallTimeout=30000
+                  milliseconds one round trip may take (oci_set_call_timeout,
+                  client 18c+); longer calls end with ORA-03156. Data Pump runs of
+                  ext:ezoracle:datapump are exempt.
+   KeepAliveInterval=60
+                  for long running processes: after that many idle seconds the
+                  next statement is preceded by a round trip, and a dead
+                  connection (database restarted, firewall timeout) is replaced
+                  first. Recommended for Velocity workers and cronjobs.
+
+4. Performance ([PerformanceSettings])
+   -----------------------------------
+
+   Prefetch=500        rows per round trip for queries (oci_set_prefetch)
+   LobPrefetch=16384   LOB bytes sent with the row (oci_set_prefetch_lob)
+
+   Limits and offsets are applied by the database (OFFSET/FETCH, 12.1+).
+
+5. Tracing ([TraceSettings])
+   -------------------------
+
+##################################
+[TraceSettings]
+ClientIdentifier=%siteaccess%:%user_id%
+ModuleName=Exponential %siteaccess%
+Action=%module%/%view%
+ClientInfo=pid %pid%
+##################################
+
+   The values appear in V$SESSION (CLIENT_IDENTIFIER, MODULE, ACTION,
+   CLIENT_INFO) and in AWR/ASH reports, and ext:ezoracle:report shows them
+   next to the top SQL. Patterns: %siteaccess% %module% %view% %user_id%
+   %script% %pid%. They are sent with the next round trip when they change.
+
+6. Logging ([LogSettings])
+   -----------------------
+
+   SlowQueryThreshold=500      statements taking 500 ms or more go to
+                               var/log/<SlowQueryLog> (default oracle-slow.log)
+   MaskLiterals=enabled        string literals of the logged SQL become '?';
+                               bound values are always logged as their length
+   StatementCounts=enabled     statement counts per type (SELECT, INSERT ...) in
+                               the debug output's accumulators (with
+                               DebugOutput=enabled)
+
+Console commands
+================
+
+   ./bin/php/console ext:ezoracle:<command> [-s <siteaccess>] [options]
+
+   Every command has --help, prints one PASS/WARN/FAIL/INFO line per check and
+   ends with exit status 1 when one failed. Those that change something take
+   --dry-run. V$ and DBA views need SELECT_CATALOG_ROLE; without it the
+   affected checks say so.
+
+   health             connection, versions, charset, invalid objects, tablespaces,
+                      sessions, blocking locks, recycle bin, sequences, statistics
+   gather-stats       DBMS_STATS.GATHER_SCHEMA_STATS ([StatisticsSettings])
+   recompile          DBMS_UTILITY.COMPILE_SCHEMA for invalid objects
+   purge-recyclebin   PURGE RECYCLEBIN
+   sequence-sync      sequences behind their tables' ids; --fix moves them
+                      (bin/php/ora-update-seqs.php does it from a login string)
+   schema-diff        the database against share/db_schema.dba (--file=<dba>),
+                      with the upgrade SQL
+   indexes            index report; --rebuild [--index=<name>] [--online];
+                      --monitor-on, --monitor-off, --usage
+   report             --sizes (tables with index and LOB space), --top-sql (V$SQL)
+   datapump           --export=<file.dmp> / --import=<file.dmp>
+                      [--table-exists-action=SKIP|APPEND|TRUNCATE|REPLACE]
+                      [--remap-schema=FROM:TO] through DBMS_DATAPUMP into the
+                      directory object of [DataPumpSettings] Directory (default
+                      DATA_PUMP_DIR; the user needs READ, WRITE on it). The same
+                      with the server tools: expdp <user>@<db> schemas=<user>
+                      directory=DATA_PUMP_DIR dumpfile=<file.dmp>, impdp ...
+   ci-indexes         linguistic indexes for OracleCaseInsensitive (--create, --drop)
+
+Cronjobs
+========
+
+   The cronjob part "ezoracle" runs the statistics, recycle bin, sequence and
+   health jobs; "ezoraclehealth" the health check alone. Each job does nothing
+   until it is enabled:
+
+##################################
+[CronjobSettings]
+GatherStatistics=enabled
+HealthMonitor=enabled
+HealthMailReceivers[]=dba@example.com
+PurgeRecycleBin=enabled
+SequenceCheck=enabled
+SequenceFix=disabled
+##################################
+
+   in settings/override/ezoracle.ini.append.php, and e.g. in crontab:
+
+   15 3 * * *  cd /path/to/exponential && php runcronjobs.php -q -s <admin siteaccess> ezoracle
+   0 * * * *   cd /path/to/exponential && php runcronjobs.php -q -s <admin siteaccess> ezoraclehealth
+
+   Reports go to var/log/ezoracle-<job>.log; the health monitor mails its
+   report to HealthMailReceivers[] when a check warns or fails.
 
 Troubleshooting
 ===============
@@ -325,11 +550,10 @@ Troubleshooting
    ------------
 
    Some problems are more common than others. The most common ones are listed
-   in the the FAQ.
+   in the FAQ.
 
 2. Support
    -------
 
-   If you have find any problems not handled by this document or the FAQ you
-   can contact eZ system trough the support system:
-   http://ez.no/support
+   Problems not handled by this document or the FAQ:
+   https://github.com/se7enxweb/ezoracle/issues
