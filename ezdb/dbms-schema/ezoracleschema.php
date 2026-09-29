@@ -586,7 +586,7 @@ class eZOracleSchema extends eZDBSchemaInterface
         if ( $def['type'] == 'auto_increment' && in_array( 'type', $params['different-options'] ) )
         {
             $defs = $this->generateAutoIncrement( $table_name, $field_name, $def );
-            $seq_name = str_replace ( array( 'CREATE SEQUENCE ', ";\n" ), '', $defs['sequences'][0] );
+            $seq_name = eZOracleSchema::sequenceName( $table_name );
             $sql = "\n" .
                 "DECLARE\n" .
                 "  maxval INTEGER;\n" .
@@ -640,16 +640,21 @@ class eZOracleSchema extends eZDBSchemaInterface
      */
     function generateAutoIncrement( $table_name, $field_name, $field_def, $params=array(), $withClosure = true )
     {
-        $seqName  = preg_replace( '/^ez/', 's_', $table_name );
-        if ( $seqName == $table_name )
-        {
-            // table name does not start with 'ez': an extension, most likely
-            $seqName = substr( 'se_' . $seqName, 0, 30 );
-        }
+        $seqName  = eZOracleSchema::sequenceName( $table_name );
         $trigName = eZOracleSchema::shorten( $table_name . '_' . $field_name, 30-3 ) .'_tr';
-        $sqlSeq = "CREATE SEQUENCE $seqName";
+        // A table dropped with a plain DROP TABLE (package installers, upgrade
+        // scripts) leaves its sequence behind, and a plain CREATE SEQUENCE then
+        // fails with ORA-00955, so the table could never be created again.
+        // An existing sequence is kept: correctSequenceValues() moves it past
+        // the ids of the inserted data. Plain PL/SQL, so it runs on 19c as well
+        // as on 23ai (which would also know CREATE SEQUENCE IF NOT EXISTS).
+        $sqlSeq = "BEGIN\n" .
+                  "  EXECUTE IMMEDIATE 'CREATE SEQUENCE $seqName';\n" .
+                  "EXCEPTION WHEN OTHERS THEN\n" .
+                  "  IF SQLCODE != -955 THEN RAISE; END IF;\n" .
+                  "END;";
         if ( $withClosure )
-            $sqlSeq .= ";\n";
+            $sqlSeq .= "\n/\n";
         // be kind to people that unwittingly save this file with CR-LF line endings
         // (PLSQL does not like that at all, so the trigger would not compile any more)
         $sqlTrig = "CREATE OR REPLACE TRIGGER $trigName
@@ -743,9 +748,37 @@ BEGIN\n".
     /**
      * @access private
      */
-    function generateDropTable( $table )
+    function generateDropTable( $table, $params = array() )
     {
-        return "DROP TABLE $table;\n";
+        // the auto_increment sequence is not dropped with the table (the trigger is);
+        // a table without one simply has no sequence to drop
+        $seqName = eZOracleSchema::sequenceName( $table );
+        return "DROP TABLE $table;\n" .
+               "BEGIN\n" .
+               "  EXECUTE IMMEDIATE 'DROP SEQUENCE $seqName';\n" .
+               "EXCEPTION WHEN OTHERS THEN\n" .
+               "  IF SQLCODE != -2289 THEN RAISE; END IF;\n" .
+               "END;\n/\n";
+    }
+
+    /**
+     * The name of the sequence that feeds the auto_increment column of $tableName:
+     * 'ez' is replaced by 's_' (ezcontentobject -> s_contentobject), other tables
+     * get 'se_' in front, cut to 30 characters. eZOracleDB::lastSerialID() reads
+     * the same sequence.
+     *
+     * @param string $tableName
+     * @return string
+     */
+    static function sequenceName( $tableName )
+    {
+        $seqName = preg_replace( '/^ez/', 's_', $tableName );
+        if ( $seqName == $tableName )
+        {
+            // table name does not start with 'ez': an extension, most likely
+            $seqName = substr( 'se_' . $seqName, 0, 30 );
+        }
+        return $seqName;
     }
 
     /**
