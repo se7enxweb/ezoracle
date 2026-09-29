@@ -10,6 +10,17 @@ ImplementationAlias[ezoracle]=eZOracleDB
 # as '' too. Numeric and other columns always keep NULL.
 OracleEmptyStringForNull=disabled
 
+# String comparison and sorting. Oracle compares strings binary and case
+# sensitive; MySQL's *_ci collations do not. enabled sets, after connecting,
+#   ALTER SESSION SET NLS_COMP=LINGUISTIC NLS_SORT=<OracleCaseInsensitiveSort>
+# so =, LIKE, IN and ORDER BY ignore case (BINARY_CI) or case and accents
+# (BINARY_AI). Plain indexes on the compared columns are then not used for
+# those comparisons: create linguistic indexes for them with
+#   php bin/php/console ext:ezoracle:ci-indexes --create
+# (see INSTALL, "Case-insensitive comparisons").
+OracleCaseInsensitive=disabled
+OracleCaseInsensitiveSort=BINARY_CI
+
 # Example configuration for connecting to an oracle db
 #DatabaseImplementation=ezoracle
 #User=scott

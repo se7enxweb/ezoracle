@@ -82,6 +82,23 @@ class eZOracleDB extends eZDBInterface
         {
             $this->EmptyStringForNullText = $ini->variable( 'DatabaseSettings', 'OracleEmptyStringForNull' ) === 'enabled';
         }
+        if ( $ini->hasVariable( 'DatabaseSettings', 'OracleCaseInsensitive' ) )
+        {
+            $this->CaseInsensitive = $ini->variable( 'DatabaseSettings', 'OracleCaseInsensitive' ) === 'enabled';
+        }
+        if ( $ini->hasVariable( 'DatabaseSettings', 'OracleCaseInsensitiveSort' ) )
+        {
+            $sort = trim( $ini->variable( 'DatabaseSettings', 'OracleCaseInsensitiveSort' ) );
+            // it goes into ALTER SESSION as it is: a linguistic sort name only
+            if ( preg_match( '/^[A-Za-z][A-Za-z0-9_]*$/', $sort ) )
+            {
+                $this->CaseInsensitiveSort = strtoupper( $sort );
+            }
+            else
+            {
+                eZDebug::writeWarning( "OracleCaseInsensitiveSort '$sort' is not a sort name, using BINARY_CI", __METHOD__ );
+            }
+        }
 
         if ( function_exists( "oci_connect" ) )
         {
@@ -160,11 +177,7 @@ class eZOracleDB extends eZDBInterface
             else
             {
                 $this->IsConnected = true;
-                // make sure the decimal separator is the dot, and that the lengths
-                // of the VARCHAR2 columns the schema handler creates count
-                // characters, not bytes, as the lengths in the .dba files do
-                // (VARCHAR2(255) would hold ~85 CJK characters otherwise)
-                $this->query( "ALTER SESSION SET NLS_NUMERIC_CHARACTERS='. ' NLS_LENGTH_SEMANTICS=CHAR" );
+                $this->initializeSession();
             }
 
             if ( $this->DBConnection === false )
@@ -201,6 +214,28 @@ class eZOracleDB extends eZDBInterface
         }
 
         eZDebug::createAccumulatorGroup( 'oracle_total', 'Oracle Total' );
+    }
+
+    /**
+     * The session settings every connection gets, in one statement:
+     * - the dot as decimal separator;
+     * - character length semantics, so the VARCHAR2 columns the schema handler
+     *   creates count characters as the lengths in the .dba files do
+     *   (VARCHAR2(255) would hold ~85 CJK characters otherwise);
+     * - with site.ini [DatabaseSettings] OracleCaseInsensitive=enabled, linguistic
+     *   comparison and sorting (NLS_COMP=LINGUISTIC, NLS_SORT=OracleCaseInsensitiveSort).
+     *
+     * @return bool
+     */
+    function initializeSession()
+    {
+        $settings = array( "NLS_NUMERIC_CHARACTERS='. '", 'NLS_LENGTH_SEMANTICS=CHAR' );
+        if ( $this->CaseInsensitive )
+        {
+            $settings[] = 'NLS_COMP=LINGUISTIC';
+            $settings[] = 'NLS_SORT=' . $this->CaseInsensitiveSort;
+        }
+        return $this->query( 'ALTER SESSION SET ' . implode( ' ', $settings ) );
     }
 
     function databaseName()
@@ -1617,6 +1652,10 @@ class eZOracleDB extends eZDBInterface
     public $ServerMajorVersion = null;
     /// NULL in text columns is returned as '' (site.ini [DatabaseSettings] OracleEmptyStringForNull)
     public $EmptyStringForNullText = false;
+    /// linguistic comparison and sorting (site.ini [DatabaseSettings] OracleCaseInsensitive)
+    public $CaseInsensitive = false;
+    /// the NLS_SORT used then (site.ini [DatabaseSettings] OracleCaseInsensitiveSort)
+    public $CaseInsensitiveSort = 'BINARY_CI';
 
     // @todo move this to a static var, and we should shave off a little ram...
     var $CharsetsMap = array(
