@@ -82,14 +82,18 @@ class eZOracleDB extends eZDBInterface
         {
             $this->Mode = OCI_COMMIT_ON_SUCCESS;
 
-            // translate chosen charset to its Oracle analogue
-            $oraCharset = null;
-            if ( isset( $this->Charset ) && $this->Charset !== '' )
+            // translate chosen charset to its Oracle analogue; without one oci8
+            // would take NLS_LANG from the environment, which is US7ASCII when it
+            // is not set (every non-ASCII character becomes '?'), so the client
+            // then talks UTF-8, the internal charset of Exponential
+            $oraCharset = $this->oracleCharset( $this->Charset );
+            if ( $oraCharset === null )
             {
-                if ( array_key_exists( $this->Charset, $this->CharsetsMap ) )
+                if ( $this->Charset !== null && $this->Charset !== '' && $this->Charset !== false )
                 {
-                     $oraCharset = $this->CharsetsMap[$this->Charset];
+                    eZDebug::writeWarning( "Charset '{$this->Charset}' has no Oracle equivalent, using AL32UTF8", __METHOD__ );
                 }
+                $oraCharset = 'AL32UTF8';
             }
 
             $maxAttempts = $this->connectRetryCount();
@@ -151,8 +155,11 @@ class eZOracleDB extends eZDBInterface
             else
             {
                 $this->IsConnected = true;
-                // make sure the decimal separator is the dot
-                $this->query( "ALTER SESSION SET NLS_NUMERIC_CHARACTERS='. '" );
+                // make sure the decimal separator is the dot, and that the lengths
+                // of the VARCHAR2 columns the schema handler creates count
+                // characters, not bytes, as the lengths in the .dba files do
+                // (VARCHAR2(255) would hold ~85 CJK characters otherwise)
+                $this->query( "ALTER SESSION SET NLS_NUMERIC_CHARACTERS='. ' NLS_LENGTH_SEMANTICS=CHAR" );
             }
 
             if ( $this->DBConnection === false )
@@ -1136,6 +1143,71 @@ class eZOracleDB extends eZDBInterface
         return false;
     }
 
+    /**
+     * The Oracle name of an Exponential charset (utf-8 -> AL32UTF8), or null
+     * when there is none. The lookup does not depend on the case of the name.
+     *
+     * @param string $charset
+     * @return string|null
+     */
+    function oracleCharset( $charset )
+    {
+        if ( !is_string( $charset ) || $charset === '' )
+        {
+            return null;
+        }
+        $charset = strtolower( eZCharsetInfo::realCharsetCode( $charset ) );
+        foreach ( $this->CharsetsMap as $ezCharset => $oraCharset )
+        {
+            if ( strtolower( $ezCharset ) === $charset )
+            {
+                return $oraCharset;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The character set the database stores text in (NLS_CHARACTERSET), or false.
+     *
+     * @return string|bool
+     */
+    function databaseCharset()
+    {
+        if ( $this->DatabaseCharset === null )
+        {
+            $rows = $this->isConnected() ? $this->arrayQuery( "SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_CHARACTERSET'" ) : false;
+            if ( !isset( $rows[0]['value'] ) )
+            {
+                return false;
+            }
+            $this->DatabaseCharset = strtoupper( $rows[0]['value'] );
+        }
+        return $this->DatabaseCharset;
+    }
+
+    /**
+     * True when text in $charset can be stored without loss: the charset has
+     * an Oracle equivalent (the client converts to and from it) and the
+     * database stores either that charset or Unicode (AL32UTF8, UTF8).
+     * The setup wizard asks this for 'utf-8' to decide on a Unicode site.
+     */
+    function isCharsetSupported( $charset )
+    {
+        $oraCharset = $this->oracleCharset( $charset );
+        if ( $oraCharset === null )
+        {
+            return false;
+        }
+        $dbCharset = $this->databaseCharset();
+        if ( $dbCharset === false )
+        {
+            // not connected (yet): the client can at least convert it
+            return true;
+        }
+        return $dbCharset === strtoupper( $oraCharset ) || in_array( $dbCharset, array( 'AL32UTF8', 'UTF8' ) );
+    }
+
     function close()
     {
         if ( $this->DBConnection !== false )
@@ -1375,6 +1447,8 @@ class eZOracleDB extends eZDBInterface
     var $DBConnection;
     var $Mode;
     var $BindVariableArray = array();
+    /// NLS_CHARACTERSET of the database, read once (see databaseCharset())
+    public $DatabaseCharset = null;
 
     // @todo move this to a static var, and we should shave off a little ram...
     var $CharsetsMap = array(
