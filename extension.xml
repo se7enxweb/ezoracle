@@ -4,7 +4,7 @@
         <name>eZ Oracle LS</name>
         <version>//autogentag//</version>
         <copyright>Copyright (C) eZ Systems AS. All rights reserved.</copyright>
-        <license>//EZP_LICENSE//</license>
-        <info_url>http://projects.ez.no/ezoracle</info_url>
+        <license>GNU General Public License v2.0 (or any later version)</license>
+        <info_url>https://github.com/se7enxweb/ezoracle</info_url>
     </metadata>
 </software>

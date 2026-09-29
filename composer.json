@@ -1,6 +1,6 @@
 {
     "name": "se7enxweb/ezoracle",
-    "description": "Database driver for eZ Publish CMS to use Oracle for a database backend",
+    "description": "Oracle database driver for Exponential CMS (PHP 8, oci8)",
     "type": "ezpublish-legacy-extension",
     "license": "GPL-2.0-or-later",
     "authors": [
