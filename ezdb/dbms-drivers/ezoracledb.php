@@ -51,9 +51,9 @@ class eZOracleDB extends eZDBInterface
     /**
      * Creates a new eZOracleDB object and connects to the database.
      */
-    function eZOracleDB( $parameters )
+    public function __construct( $parameters )
     {
-        $this->eZDBInterface( $parameters );
+        parent::__construct( $parameters );
 
         if ( !extension_loaded( 'oci8' ) )
         {
@@ -75,7 +75,6 @@ class eZOracleDB extends eZDBInterface
 
         $this->ErrorMessage = false;
         $this->ErrorNumber = false;
-        $this->IgnoreTriggerErrors = false;
 
         $ini = eZINI::instance();
 

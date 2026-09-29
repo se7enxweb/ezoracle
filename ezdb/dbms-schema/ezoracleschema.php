@@ -38,9 +38,9 @@
 class eZOracleSchema extends eZDBSchemaInterface
 {
 
-    function eZOracleSchema( $params )
+    public function __construct( $params )
     {
-        $this->eZDBSchemaInterface( $params );
+        parent::__construct( $params );
     }
 
     function schema( $params = array() )
