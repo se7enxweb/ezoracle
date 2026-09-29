@@ -703,9 +703,17 @@ class eZOracleDB extends eZDBInterface
         return "  $str   ";
     }
 
+    /**
+     * MD5 in SQL, as a lower-case hex string like MySQL's MD5().
+     *
+     * STANDARD_HASH() exists since Oracle 12.1 and needs no function in the
+     * schema (the old md5_digest() used dbms_obfuscation_toolkit, removed in
+     * 21c). Oracle stores '' as NULL, and STANDARD_HASH( NULL ) is NULL, so
+     * NULL gives the hash of the empty string, as md5_digest() did.
+     */
     function md5( $str )
     {
-        return " md5_digest( $str ) ";
+        return " NVL( LOWER( RAWTOHEX( STANDARD_HASH( $str, 'MD5' ) ) ), 'd41d8cd98f00b204e9800998ecf8427e' ) ";
     }
 
     function bitAnd( $arg1, $arg2 )
@@ -713,9 +721,13 @@ class eZOracleDB extends eZDBInterface
         return " bitand( $arg1, $arg2 ) ";
     }
 
+    /**
+     * Bitwise OR from BITAND(), which every Oracle release has: a | b = a + b - ( a & b ).
+     * Needs neither the bitor() function of sql/bitor.sql nor the BITOR() of 23ai.
+     */
     function bitOr( $arg1, $arg2 )
     {
-        return " bitor( $arg1, $arg2 ) ";
+        return " ( ( $arg1 ) + ( $arg2 ) - bitand( $arg1, $arg2 ) ) ";
     }
 
     function supportedRelationTypeMask()
