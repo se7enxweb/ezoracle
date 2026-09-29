@@ -1208,6 +1208,57 @@ class eZOracleDB extends eZDBInterface
         return $dbCharset === strtoupper( $oraCharset ) || in_array( $dbCharset, array( 'AL32UTF8', 'UTF8' ) );
     }
 
+    function databaseClientVersion()
+    {
+        if ( !function_exists( 'oci_client_version' ) )
+        {
+            return false;
+        }
+        $versionInfo = oci_client_version();
+        return array( 'string' => $versionInfo,
+                      'values' => explode( '.', $versionInfo ) );
+    }
+
+    /**
+     * Locks the tables until unlock(), like the PostgreSQL driver: a transaction
+     * is started, and LOCK TABLE holds until it is committed.
+     *
+     * @param string|array $table a table name, or a list of array( 'table' => name )
+     */
+    function lock( $table )
+    {
+        if ( !$this->isConnected() )
+        {
+            return;
+        }
+        $this->begin();
+        $tables = array();
+        if ( is_array( $table ) )
+        {
+            foreach ( $table as $tableItem )
+            {
+                $tables[] = is_array( $tableItem ) ? $tableItem['table'] : $tableItem;
+            }
+        }
+        else
+        {
+            $tables[] = $table;
+        }
+        if ( count( $tables ) > 0 )
+        {
+            $this->query( "LOCK TABLE " . implode( ', ', $tables ) . " IN EXCLUSIVE MODE" );
+        }
+    }
+
+    function unlock()
+    {
+        if ( !$this->isConnected() )
+        {
+            return;
+        }
+        $this->commit();
+    }
+
     function close()
     {
         if ( $this->DBConnection !== false )
