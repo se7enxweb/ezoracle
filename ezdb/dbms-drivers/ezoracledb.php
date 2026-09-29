@@ -159,10 +159,11 @@ class eZOracleDB extends eZDBInterface
             {
                 $error = oci_error();
 
-                // workaround for bug in PHP oci8 extension
-                if ( $error === false && !getenv( "ORACLE_HOME" ) )
+                // oci_error() gives false when the client could not even be
+                // initialised (no client libraries, bad NLS settings, ...)
+                if ( !is_array( $error ) )
                 {
-                    $error = array( 'code' => -1, 'message' => 'ORACLE_HOME environment variable is not set' );
+                    $error = array( 'code' => -1, 'message' => 'oci_connect() failed without an Oracle error (are the Oracle client libraries installed and found?)' );
                 }
 
                 if ( $error['code'] != 0 )
@@ -206,10 +207,14 @@ class eZOracleDB extends eZDBInterface
         {
             $value = $this->InputTextCodec->convertString( $value );
         }
-        $this->BindVariableArray[] = array( 'name' => $fieldDef['name'],
-                                            'dbname' => ':' . $fieldDef['name'],
+        // a caller that gives no field name still gets a unique placeholder
+        $name = ( is_array( $fieldDef ) && isset( $fieldDef['name'] ) && $fieldDef['name'] !== '' )
+              ? $fieldDef['name']
+              : 'ezbind' . count( $this->BindVariableArray );
+        $this->BindVariableArray[] = array( 'name' => $name,
+                                            'dbname' => ':' . $name,
                                             'value' => $value );
-        return ':' . $fieldDef['name'];
+        return ':' . $name;
     }
 
     function analyseQuery( $sql, $server = false )
@@ -218,11 +223,15 @@ class eZOracleDB extends eZDBInterface
         // If query analysis is enable we need to run the query
         // with an EXPLAIN in front of it
         // Then we build a human-readable table out of the result
-        if ( $this->QueryAnalysisOutput )
+        if ( $this->QueryAnalysisOutput && $this->isConnected() )
         {
             $stmtid = substr( md5( $sql ), 0, 30);
             $analysisStmt = oci_parse( $this->DBConnection, 'EXPLAIN PLAN SET STATEMENT_ID = \'' . $stmtid . '\' FOR ' . $sql );
-            $analysisResult = oci_execute( $analysisStmt, $this->Mode );
+            if ( !$analysisStmt )
+            {
+                return false;
+            }
+            $analysisResult = @oci_execute( $analysisStmt, $this->Mode );
             if ( $analysisResult )
             {
                 // note: we might make the name of the explain plan table an ini variable...
@@ -262,12 +271,13 @@ class eZOracleDB extends eZDBInterface
                                 $columns[$col] = array( 'name' => $col,
                                                         'size' => strlen( $col ) );
                             }
-                            $columns[$col]['size'] = max( $columns[$col]['size'], strlen( $data ) );
+                            $columns[$col]['size'] = max( $columns[$col]['size'], strlen( (string)$data ) );
                         }
                     }
 
                     $analysisText = '';
                     $delimiterLine = array();
+                    $colLine = array();
                     // Generate the column line and the vertical delimiter
                     // The look of the table is taken from the MySQL CLI client
                     // It looks like this:
@@ -294,10 +304,10 @@ class eZOracleDB extends eZDBInterface
                         {
                             $name = $col['name'];
                             $size = $col['size'];
-                            $data = isset( $row[$name] ) ? $row[$name] : '';
+                            $data = isset( $row[$name] ) ? (string)$row[$name] : '';
                             // Align numerical values to the right (ie. pad left)
-                            $rowLine[] = ' ' . str_pad( $row[$name], $size, ' ',
-                                                        is_numeric( $row[$name] ) ? STR_PAD_LEFT : STR_PAD_RIGHT ) . ' ';
+                            $rowLine[] = ' ' . str_pad( $data, $size, ' ',
+                                                        is_numeric( $data ) ? STR_PAD_LEFT : STR_PAD_RIGHT ) . ' ';
                         }
                         $analysisText .= '|' . join( '|', $rowLine ) . "|\n";
                         $analysisText .= $delimiterLine;
@@ -321,8 +331,8 @@ class eZOracleDB extends eZDBInterface
         if ( !$this->isConnected() )
         {
             eZDebug::writeError( "Trying to do a query without being connected to a database!", "eZOracleDB"  );
-            // note: postgres returns a false in this case, mysql returns nothing...
-            return null;
+            // like the PostgreSQL and MySQLi drivers
+            return false;
         }
         $result = true;
 
@@ -358,7 +368,7 @@ class eZOracleDB extends eZDBInterface
             $exec = @oci_execute( $statement, $this->Mode );
             if ( !$exec )
             {
-                if ( $this->setError( $statement, 'query()' ) )
+                if ( $this->setError( $statement, 'query()', $sql ) )
                 {
                     $result = false;
                 }
@@ -382,7 +392,7 @@ class eZOracleDB extends eZDBInterface
         }
         else
         {
-            if ( $this->setError( $this->DBConnection, 'query()' ) )
+            if ( $this->setError( $this->DBConnection, 'query()', $sql ) )
             {
                 $result = false;
             }
@@ -466,41 +476,30 @@ class eZOracleDB extends eZDBInterface
         {
             $this->startTimer();
         }
+        $this->ErrorMessage = false;
+        $this->ErrorNumber = false;
         $statement = oci_parse( $this->DBConnection, $sql );
-        //flush();
-        if ( !@oci_execute( $statement, $this->Mode ) )
+        if ( !$statement )
         {
             eZDebug::accumulatorStop( 'oracle_query' );
-            $error = oci_error( $statement );
-            $hasError = true;
-            if ( !$error['code'] )
+            $this->setError( $this->DBConnection, 'arrayQuery()', $sql );
+            if ( $this->errorHandling == eZDB::ERROR_HANDLING_EXCEPTIONS )
             {
-                $hasError = false;
+                throw new eZDBException( $this->ErrorMessage, $this->ErrorNumber );
             }
-            if ( $hasError )
+            return false;
+        }
+        if ( !@oci_execute( $statement, $this->Mode ) )
+        {
+            if ( $this->setError( $statement, 'arrayQuery()', $sql ) )
             {
-                $result = false;
-                $this->ErrorMessage = $error['message'];
-                $this->ErrorNumber = $error['code'];
-                if ( isset( $error['sqltext'] ) )
-                    $sql = $error['sqltext'];
-                $offset = false;
-                if ( isset( $error['offset'] ) )
-                    $offset = $error['offset'];
-                $offsetText = '';
-                if ( $offset !== false )
-                {
-                    $offsetText = ' at offset ' . $offset;
-                    $sqlOffsetText = "\n\nStart of error:\n" . substr( $sql, $offset );
-                }
-                eZDebug::writeError( "Error (" . $error['code'] . "): " . $error['message'] . "\n" .
-                                     "Failed query$offsetText:\n" .
-                                     $sql .
-                                     $sqlOffsetText, "eZOracleDB" );
                 oci_free_statement( $statement );
                 eZDebug::accumulatorStop( 'oracle_query' );
-
-                return $result;
+                if ( $this->errorHandling == eZDB::ERROR_HANDLING_EXCEPTIONS )
+                {
+                    throw new eZDBException( $this->ErrorMessage, $this->ErrorNumber );
+                }
+                return false;
             }
         }
         eZDebug::accumulatorStop( 'oracle_query' );
@@ -646,11 +645,19 @@ class eZOracleDB extends eZDBInterface
     }
 
     /**
-     * @todo return false on error instead of executing invalid sql?
+     * Returns the value the sequence of $table gave last in this session
+     * (the sequence the auto_increment trigger of eZOracleSchema uses).
+     *
+     * @return int|bool false when there is no table, no connection or no value
      */
     function lastSerialID( $table = false, $column = false )
     {
-        $id = null;
+        $id = false;
+        if ( !is_string( $table ) || $table === '' )
+        {
+            eZDebug::writeError( 'No table given, the sequence cannot be found', __METHOD__ );
+            return false;
+        }
         if ( $this->isConnected() )
         {
             $sequence = preg_replace( '/^ez/i', 's_', $table );
@@ -669,9 +676,9 @@ class eZOracleDB extends eZDBInterface
                 // SELECT * FROM user_sequences where sequence_name = $sequence;
                 eZDebug::writeError( "Cannot retrieve last serial ID on table $table. Please make sure that sequence $sequence exists and its 'before insert' trigger is valid" );
             }
-            else
+            else if ( isset( $res[0]["currval"] ) )
             {
-                $id = $res[0]["currval"];
+                $id = (int)$res[0]["currval"];
             }
         }
 
@@ -680,7 +687,12 @@ class eZOracleDB extends eZDBInterface
 
     function escapeString( $str )
     {
-        $str = str_replace ( "'", "''", $str );
+        // like the MySQLi driver: null is the empty string (and no PHP 8.1 deprecation)
+        if ( $str === null )
+        {
+            return '';
+        }
+        $str = str_replace ( "'", "''", (string)$str );
 //        $str = str_replace ("\"", "\\\"", $str );
         return $str;
     }
@@ -796,7 +808,7 @@ class eZOracleDB extends eZDBInterface
                 }
                 $sql = "SELECT COUNT( $field ) as count FROM $table $matchText";
                 $array = $this->arrayQuery( $sql, array( 'column' => '0' ) );
-                $count += $array[0];
+                $count += is_array( $array ) && isset( $array[0] ) ? (int)$array[0] : 0;
             }
         }
         return $count;
@@ -827,7 +839,7 @@ class eZOracleDB extends eZDBInterface
             }
             $sql = "SELECT COUNT( $field ) as count FROM $table $matchText";
             $array = $this->arrayQuery( $sql, array( 'column' => '0' ) );
-            $count = $array[0];
+            $count = is_array( $array ) && isset( $array[0] ) ? (int)$array[0] : false;
         }
         return $count;
     }
@@ -882,7 +894,8 @@ class eZOracleDB extends eZDBInterface
                     $matchText = "WHERE LOWER( SUBSTR( $field, 0, " . strlen( $ignoreName ) . " ) ) != '$ignoreName'";
                 }
                 $sql = "SELECT LOWER( $field ) AS $field FROM $table $matchText";
-                foreach ( $this->arrayQuery( $sql, array( 'column' => '0' ), $server ) as $result )
+                $names = $this->arrayQuery( $sql, array( 'column' => '0' ), $server );
+                foreach ( is_array( $names ) ? $names : array() as $result )
                 {
                     $array[$result] = $relationType;
                 }
@@ -945,7 +958,7 @@ class eZOracleDB extends eZDBInterface
         {
             $triggers = array();
             $rows = $this->arrayQuery( "SELECT trigger_name, table_name, trigger_body FROM user_triggers WHERE table_name NOT LIKE 'BIN$%'" );
-            foreach ( $rows as $row )
+            foreach ( is_array( $rows ) ? $rows : array() as $row )
             {
                 $triggers[] = array( 'trigger_name' => $row['trigger_name'],
                                      'table_name'   => $row['table_name'],
@@ -982,8 +995,13 @@ class eZOracleDB extends eZDBInterface
                 list( $table, $col, $trig ) = $tableData;
 
                 $rows = $this->arrayQuery( "SELECT MAX($col) AS max FROM $table" );
-                $curColVal = (int)$rows[0]['max'];
+                $curColVal = isset( $rows[0]['max'] ) ? (int)$rows[0]['max'] : 0;
                 $rows = $this->arrayQuery( "SELECT $seq.nextval AS nextval FROM DUAL" );
+                if ( !isset( $rows[0]['nextval'] ) )
+                {
+                    eZDebug::writeError( "Could not read sequence $seq, its value was not corrected", __METHOD__ );
+                    return false;
+                }
                 $curSeqVal = (int)$rows[0]['nextval'];
                 $inc = $curColVal - $curSeqVal;
 
@@ -1028,7 +1046,7 @@ class eZOracleDB extends eZDBInterface
         {
             $num = rand( 10000000, 99999999 );
             $tableName = strtoupper( str_replace( '%', $num, $pattern ) );
-            $cntResult = $this->arrayQuery( "SELECT count(*) AS cnt FROM user_tables WHERE table_name='$tableName'", $server );
+            $cntResult = $this->arrayQuery( "SELECT count(*) AS cnt FROM user_tables WHERE table_name='$tableName'", array(), $server );
             $maxTries--;
         } while( $cntResult && $cntResult[0]['cnt'] > 0 && $maxTries > 0 );
 
@@ -1079,6 +1097,11 @@ class eZOracleDB extends eZDBInterface
     {
         $query = "SELECT VALUE FROM NLS_DATABASE_PARAMETERS WHERE PARAMETER = 'NLS_CHARACTERSET'";
         $rows = $this->arrayQuery( $query );
+        if ( !isset( $rows[0]['value'] ) )
+        {
+            $currentCharset = false;
+            return false;
+        }
         $currentCharset = $rows[0]['value'];
 
 //        include_once( 'lib/ezi18n/classes/ezcharsetinfo.php' );
@@ -1170,7 +1193,9 @@ class eZOracleDB extends eZDBInterface
             {
                 if ( $type !== false )
                 {
-                    $parts[] = $statement . ' ( ' . $this->implodeWithTypeCast( ', ', array_slice( $elements, $offset, $length ), $type ) . ' )';
+                    // implodeWithTypeCast() takes the array by reference
+                    $slice = array_slice( $elements, $offset, $length );
+                    $parts[] = $statement . ' ( ' . $this->implodeWithTypeCast( ', ', $slice, $type ) . ' )';
                 }
                 else
                 {
@@ -1199,9 +1224,9 @@ class eZOracleDB extends eZDBInterface
      * oci-error calls work and because we retain backward compatibility (ie.
      * the code that calls this expects it to print ezdebugs too)
      */
-    function setError( $statement=null, $functionName='' )
+    function setError( $statement = null, $functionName = '', $sql = '' )
     {
-        if ( $statement !== null )
+        if ( $statement !== null && $statement !== false )
         {
             $error = oci_error( $statement );
         }
@@ -1210,21 +1235,24 @@ class eZOracleDB extends eZDBInterface
             $error = oci_error();
         }
 
-        $hasError = true;
-        if ( !$error['code'] )
+        // oci_error() returns false when there is no error to report
+        if ( !is_array( $error ) || !$error['code'] )
         {
-            $hasError = false;
+            return false;
         }
+
+        $hasError = true;
         if ( $hasError )
         {
             $this->ErrorMessage = $error['message'];
             $this->ErrorNumber = $error['code'];
             if ( $functionName !== '' )
             {
-                if ( isset( $error['sqltext'] ) )
+                if ( isset( $error['sqltext'] ) && $error['sqltext'] !== '' )
                 {
                     $sql = $error['sqltext'];
                 }
+                $sql = (string)$sql;
                 if ( isset( $error['offset'] ) )
                 {
                     $offset = $error['offset'];
@@ -1258,9 +1286,16 @@ class eZOracleDB extends eZDBInterface
         {
             return false;
         }
-        $versionInfo = oci_server_version( $this->DBConnection );
-        preg_match('# Release ([0-9.]+)#', $versionInfo, $matches);
-        $versionInfo = $matches[1];
+        $banner = oci_server_version( $this->DBConnection );
+        // since 18c the banner reads "... Release 19.0.0.0.0 - Production Version 19.3.0.0.0":
+        // the full number is after "Version", "Release" only carries the major one
+        if ( !is_string( $banner ) ||
+             ( !preg_match( '#\bVersion ([0-9][0-9.]*)#', $banner, $matches ) &&
+               !preg_match( '#\bRelease ([0-9][0-9.]*)#', $banner, $matches ) ) )
+        {
+            return false;
+        }
+        $versionInfo = rtrim( $matches[1], '.' );
         $versionArray = explode( '.', $versionInfo );
         return array( 'string' => $versionInfo,
                       'values' => $versionArray );
@@ -1299,14 +1334,14 @@ class eZOracleDB extends eZDBInterface
      */
     public function truncateString( $string, $maxLength, $fieldName, $truncationSuffix = '' )
     {
-        if ( strlen( $string ) <= $maxLength )
+        if ( strlen( (string)$string ) <= $maxLength )
         {
             return $string;
         }
 
         eZDebug::writeDebug( $string, "truncation of $fieldName to max_length=". $maxLength );
 
-        return mb_strcut( $string, 0, $maxLength - strlen( $truncationSuffix ), "utf-8" );
+        return mb_strcut( (string)$string, 0, $maxLength - strlen( (string)$truncationSuffix ), "utf-8" );
     }
 
     /**
@@ -1316,6 +1351,10 @@ class eZOracleDB extends eZDBInterface
      */
     public function countStringSize( $string )
     {
+        if ( !is_string( $string ) )
+        {
+            return is_scalar( $string ) ? strlen( (string)$string ) : 0;
+        }
         return strlen( $string );
     }
 
