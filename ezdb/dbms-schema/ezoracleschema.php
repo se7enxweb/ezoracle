@@ -1295,7 +1295,8 @@ BEGIN\n".
     */
     static function reservedKeywordList()
     {
-        return array(
+        // the entries of the list carried trailing spaces, so none could match a name
+        return array_map( 'trim', array(
             'access ',
             'else ',
             'modify ',
@@ -1409,7 +1410,7 @@ BEGIN\n".
             'mode ',
             'rows ',
             'with'
-        );
+        ) );
     }
 
 }
