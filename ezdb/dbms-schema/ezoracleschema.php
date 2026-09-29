@@ -745,8 +745,8 @@ BEGIN\n".
         $multiInsert = ( isset( $params['allow_multi_insert'] ) and $params['allow_multi_insert'] ) ? $this->isMultiInsertSupported() : false;
 
         // Make sure we don't generate SQL when there are no rows
-        if ( count( $dataEntries['rows'] ) == 0 )
-            return '';
+        if ( !isset( $dataEntries['rows'] ) || count( $dataEntries['rows'] ) == 0 )
+            return array();
 
         $sqlList = array();
         $sql = '';
