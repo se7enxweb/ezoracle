@@ -189,9 +189,9 @@ Initializing Oracle database
 
    o  Creating md5_digest and bitor functions
 
-      The extension requires custom procedures in the database to handle
-      md5 strings and bit operations. Your user will require `CREATE PROCEDURE'
-      privilege for this.
+      The script still creates them, for SQL of your own that calls them; the
+      driver itself no longer needs them (see the manual install below).
+      Your user will require `CREATE PROCEDURE' privilege for this.
 
    o  Cleaning up existing elements in database
 
@@ -241,11 +241,12 @@ EOF
       command accordingly to grant unlimited quota on the correct tablespace
       (and possibly specify a customised default tablespace for the user)
 
-   o  Create md5_digest and bitor functions
+   o  Create md5_digest and bitor functions (optional)
 
-      The extension requires custom procedures in the database to handle
-      md5 strings and bit operations. Your user will require `CREATE PROCEDURE'
-      privilege for this.
+      The driver no longer needs them: it computes MD5 with STANDARD_HASH
+      (Oracle 12.1 and later) and bitwise OR with BITAND. Create them only
+      for SQL of your own that calls md5_digest() or bitor(). Your user will
+      require `CREATE PROCEDURE' privilege for this.
       $ sqlplus scott/tiger@orcl < extension/ezoracle/sql/md5_digest.sql
       $ sqlplus scott/tiger@orcl < extension/ezoracle/sql/bitor.sql
 
