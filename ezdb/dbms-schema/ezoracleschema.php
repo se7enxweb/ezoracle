@@ -312,7 +312,15 @@ class eZOracleSchema extends eZDBSchemaInterface
                 return 'longtext';
             case 'CHAR':
                 return 'char';
+            case 'BLOB':
+                return 'longblob';
+            case 'DATE':
+                return 'date';
             default:
+                if ( strpos( $type, 'TIMESTAMP' ) === 0 )
+                {
+                    return 'datetime';
+                }
                 return $type;
         }
         return 'unknown';
@@ -410,15 +418,28 @@ class eZOracleSchema extends eZDBSchemaInterface
      */
     function getOracleType( $mysqlType )
     {
-        $rslt = $mysqlType;
-        $rslt = preg_replace( '/varchar/', 'VARCHAR2', $rslt );
-        $rslt = preg_replace( '/char/', 'CHAR', $rslt );
-        $rslt = preg_replace( '/(big)?int(eger)?(\([0-9]+\))?( +unsigned)?/', 'INTEGER', $rslt );
-        $rslt = preg_replace( '/^(medium|long)?text$/', 'CLOB', $rslt );
-        $rslt = preg_replace( '/^double$/', 'BINARY_DOUBLE', $rslt );
-        $rslt = preg_replace( '/^float$/', 'FLOAT', $rslt );
-        $rslt = preg_replace( '/decimal/', 'NUMBER', $rslt );
-        return $rslt;
+        // every pattern matches the whole type name: 'tinyint' must not become 'tinyINTEGER'
+        $typeMap = array( '/^varchar$/i'                                        => 'VARCHAR2',
+                          '/^char$/i'                                           => 'CHAR',
+                          '/^(tiny|small|medium|big)?int(eger)?(\([0-9]+\))?( +unsigned)?$/i' => 'INTEGER',
+                          '/^bool(ean)?$/i'                                     => 'INTEGER',
+                          '/^(tiny|medium|long)?text$/i'                        => 'CLOB',
+                          '/^(tiny|medium|long)?blob$/i'                        => 'BLOB',
+                          '/^double( precision)?$/i'                            => 'BINARY_DOUBLE',
+                          '/^float$/i'                                          => 'FLOAT',
+                          '/^(decimal|numeric)$/i'                              => 'NUMBER',
+                          '/^(datetime|timestamp)$/i'                           => 'TIMESTAMP',
+                          '/^date$/i'                                           => 'DATE' );
+        $type = trim( (string)$mysqlType );
+        foreach ( $typeMap as $pattern => $oracleType )
+        {
+            if ( preg_match( $pattern, $type ) )
+            {
+                return $oracleType;
+            }
+        }
+        // auto_increment is handled by the caller; anything else goes through as it is
+        return $type;
     }
 
     /**
@@ -440,7 +461,9 @@ class eZOracleSchema extends eZDBSchemaInterface
             // note: mysql DECIMAL(X,Y) we convert to NUMBER(X,Y) while keeping default val unquoted
             // NB: the following code is not entirely correct, as it prevents us to generate INTEGER(x),
             //     but it has always been like this in ezoracle, so we do not change (yet)
-            if ( isset( $def['length'] ) && ( !$isNumericField || $oraType == 'NUMBER' ) )
+            // LOBs and date types take no length (MySQL's 'datetime(6)' style is not carried over)
+            $typesWithoutLength = array( 'CLOB', 'BLOB', 'DATE', 'TIMESTAMP' );
+            if ( isset( $def['length'] ) && ( !$isNumericField || $oraType == 'NUMBER' ) && !in_array( $oraType, $typesWithoutLength ) )
                 $sql_def .= "({$def['length']})";
 
             // default
