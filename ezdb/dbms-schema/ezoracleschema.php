@@ -273,12 +273,13 @@ class eZOracleSchema extends eZDBSchemaInterface
     function detectAutoIncrements( $params )
     {
         $autoIncColumns = array();
-        $query = "SELECT table_name, trigger_name, trigger_body, status FROM user_triggers WHERE table_name LIKE 'EZ%'";
+        // all tables: extension tables (explayouts_*, cjwnl_* ...) have sequences too
+        $query = "SELECT table_name, trigger_name, trigger_body, status FROM user_triggers WHERE table_name NOT LIKE 'BIN$%'";
         $resultArray = $this->DBInstance->arrayQuery( $query );
-        foreach ( $resultArray as $row )
+        foreach ( is_array( $resultArray ) ? $resultArray : array() as $row )
         {
             $triggerBody =& $row['trigger_body'];
-            if ( !preg_match( '/SELECT\s+(\w+).nextval\s+INTO\s+:new.(\w+)\s+FROM\s+dual/', $triggerBody, $matches ) )
+            if ( !is_string( $triggerBody ) || !preg_match( '/SELECT\s+(\w+)\.nextval\s+INTO\s+:new\.(\w+)\s+FROM\s+dual/i', $triggerBody, $matches ) )
                 continue;
 
             $seqName =& $matches[1];
@@ -290,7 +291,7 @@ class eZOracleSchema extends eZDBSchemaInterface
                 // the column is thus technically an autoincrement, but it can never work...
                 $query = "SELECT COUNT(*) AS ok FROM user_sequences WHERE sequence_name = '" . strtoupper( $seqName ) . "'";
                 $resultArray2 = $this->DBInstance->arrayQuery( $query );
-                if ( $resultArray2[0]['ok'] != 1 )
+                if ( !isset( $resultArray2[0]['ok'] ) || $resultArray2[0]['ok'] != 1 )
                 {
                     continue;
                 }
