@@ -34,6 +34,7 @@
 # Usage: ora-update-seqs [--exact] <login_string>
 # For example,
 #        ora-update-seqs scott/tiger@orcl
+#        ORACLE_PASSWORD=tiger ora-update-seqs scott@orcl   (password not on the command line)
 ##############################################################################
 
 
@@ -52,6 +53,15 @@ define( 'TRIGGER_REGEXP_2',
 ##############################################################################
 function oraParseLoginString( $loginString, &$oraUser, &$oraPass, &$oraInst )
 {
+    // user@instance takes the password from the ORACLE_PASSWORD environment
+    // variable, which, unlike the command line, other users cannot read in ps
+    if ( preg_match( '|^([^/\s@]+)@(\S+)$|', $loginString, $matches ) && getenv( 'ORACLE_PASSWORD' ) !== false )
+    {
+        $oraUser = $matches[1];
+        $oraPass = getenv( 'ORACLE_PASSWORD' );
+        $oraInst = $matches[2];
+        return true;
+    }
     if ( !preg_match( '|^(\S+)/(\S+)@(\S+)$|', $loginString, $matches ) )
         return false;
     $oraUser = $matches[1];
@@ -65,10 +75,10 @@ function oraFetchTriggersInfo( $oraDB )
 {
     $triggers = array();
     $query = "SELECT trigger_name,table_name,trigger_body FROM user_triggers WHERE table_name NOT LIKE 'BIN$%'";
-    $statement = OCIParse( $oraDB, $query );
-    OCIExecute( $statement );
-    while ( OCIFetchInto( $statement, $row,
-                           OCI_ASSOC+OCI_RETURN_LOBS+OCI_RETURN_NULLS ) )
+    $statement = oci_parse( $oraDB, $query );
+    oci_execute( $statement );
+    while ( $row = oci_fetch_array( $statement,
+                                    OCI_ASSOC+OCI_RETURN_LOBS+OCI_RETURN_NULLS ) )
     {
         $triggers[] = array(
             'table_name'   => $row['TABLE_NAME'],
@@ -76,7 +86,7 @@ function oraFetchTriggersInfo( $oraDB )
             'trigger_name' => $row['TRIGGER_NAME'],
        );
     }
-    OCIFreeStatement( $statement );
+    oci_free_statement( $statement );
     return $triggers;
 }
 
@@ -108,17 +118,17 @@ function oraSelectOneVar( $oraDB, $query )
 {
     $val = false;
 
-    if( !( $statement = OCIParse( $oraDB, $query ) ) )
+    if( !( $statement = oci_parse( $oraDB, $query ) ) )
         return false;
 
-    if( OCIExecute( $statement ) )
+    if( oci_execute( $statement ) )
     {
-        OCIFetchInto( $statement, $row,
-                      OCI_NUM+OCI_RETURN_LOBS+OCI_RETURN_NULLS );
-        $val = $row[0];
+        $row = oci_fetch_array( $statement,
+                                OCI_NUM+OCI_RETURN_LOBS+OCI_RETURN_NULLS );
+        $val = is_array( $row ) ? $row[0] : false;
     }
 
-    OCIFreeStatement( $statement );
+    oci_free_statement( $statement );
     return $val;
 
 }
@@ -126,10 +136,10 @@ function oraSelectOneVar( $oraDB, $query )
 ##############################################################################
 function oraDoQuery( $oraDB, $query )
 {
-    if ( !( $statement = OCIParse( $oraDB, $query ) ) )
+    if ( !( $statement = oci_parse( $oraDB, $query ) ) )
         return false;
-    $rc = OCIExecute( $statement );
-    OCIFreeStatement( $statement );
+    $rc = oci_execute( $statement );
+    oci_free_statement( $statement );
     return $rc;
 }
 
@@ -186,6 +196,7 @@ function showUsage( $argv )
     echo "Usage: $argv[0] [options] <login_string>\n";
     echo "Options:\n";
     echo "\t--exact: lower the next value of sequences that are above table max value, too\n";
+    echo "<login_string> is user/password@instance, or user@instance with the password in ORACLE_PASSWORD\n";
     echo "\n";
     exit( 1 );
 }
@@ -226,16 +237,16 @@ $oraInst = ''; // oracle instance
 if ( !oraParseLoginString( $loginString, $oraUser, $oraPass, $oraInst ) )
     die( "Malformed login string: $argv[1]\n" );
 
-if ( !function_exists( 'OCILogon' )  )
+if ( !function_exists( 'oci_connect' ) )
     die( "Oci8 extension not activated, cannot execute\n" );
 
-if( !( $oraDB = OCILogon( $oraUser, $oraPass, $oraInst ) ) )
+if( !( $oraDB = oci_connect( $oraUser, $oraPass, $oraInst, 'AL32UTF8' ) ) )
     die( "cannot connect to Oracle\n" );
 
 $triggers = oraFetchTriggersInfo( $oraDB );
 $seqs     = getSequences( $triggers );
 oraUpdateSequences( $oraDB, $seqs, $optExact );
 
-OCILogOff( $oraDB );
+oci_close( $oraDB );
 
 ?>
