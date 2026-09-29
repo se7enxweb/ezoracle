@@ -37,6 +37,11 @@
 
 class eZOracleSchema extends eZDBSchemaInterface
 {
+    /// the columns of the tables, for fetchTableFields() (a WHERE follows)
+    const COLUMNS_QUERY = "SELECT   a.table_name AS table_name, a.column_name AS col_name, decode (a.nullable, 'N', '1', 'Y', '0') AS not_null, a.data_type AS col_type, a.data_length AS col_size, a.char_length AS col_char_size, a.char_used AS col_char_used, a.data_default AS default_val, a.data_precision AS col_precision, a.data_scale AS col_scale FROM user_tab_columns a";
+
+    /// the indexes of the tables, for fetchTableIndexes() (an AND may follow)
+    const INDEXES_QUERY = "SELECT ui.table_name AS table_name, ui.index_name AS name, ui.index_type AS type, decode( ui.uniqueness, 'NONUNIQUE', 0, 'UNIQUE', 1 ) AS is_unique, uic.column_name AS col_name, uic.column_position AS col_pos FROM user_indexes ui, user_ind_columns uic WHERE ui.index_name = uic.index_name";
 
     public function __construct( $params )
     {
@@ -63,6 +68,7 @@ class eZOracleSchema extends eZDBSchemaInterface
             if ( !is_array( $tableArray ) )
                 $tableArray = array();
 
+            $tableNames = array();
             foreach( $tableArray as $tableNameArray )
             {
                 $table_name    = current( $tableNameArray );
@@ -71,12 +77,24 @@ class eZOracleSchema extends eZDBSchemaInterface
                     ( is_array( $params['table_include'] ) and
                     ( in_array( $table_name_lc, $params['table_include'] ) or in_array( $table_name, $params['table_include'] ) ) ) )
                 {
-                    $schema_table['name']    = $table_name_lc;
-                    $schema_table['fields']  = $this->fetchTableFields( $table_name, array_merge( $params, array( 'autoIncrementColumns' => $autoIncrementColumns ) ) );
-                    $schema_table['indexes'] = $this->fetchTableIndexes( $table_name, $params );
-
-                    $schema[$table_name_lc] = $schema_table;
+                    $tableNames[] = $table_name;
                 }
+            }
+
+            // Columns and indexes of all the tables in one query each: one query per
+            // table and kind, every one of them hard parsed, took minutes for the
+            // few hundred tables of an installation
+            $dictionaryParams = count( $tableNames ) > 2 ? array( 'dictionary' => $this->fetchDictionary() ) : array();
+
+            foreach ( $tableNames as $table_name )
+            {
+                $table_name_lc = strtolower( $table_name );
+                $schema_table = array();
+                $schema_table['name']    = $table_name_lc;
+                $schema_table['fields']  = $this->fetchTableFields( $table_name, array_merge( $params, $dictionaryParams, array( 'autoIncrementColumns' => $autoIncrementColumns ) ) );
+                $schema_table['indexes'] = $this->fetchTableIndexes( $table_name, array_merge( $params, $dictionaryParams ) );
+
+                $schema[$table_name_lc] = $schema_table;
             }
             $this->transformSchema( $schema, $params['format'] == 'local' );
             ksort( $schema );
@@ -89,6 +107,29 @@ class eZOracleSchema extends eZDBSchemaInterface
         }
 
         return $schema;
+    }
+
+    /**
+     * Reads the columns and index columns of all the tables of the schema, with
+     * one query each, grouped by upper-case table name, for fetchTableFields() and
+     * fetchTableIndexes() (their 'dictionary' parameter).
+     *
+     * @return array array( 'columns' => array( TABLE => rows ), 'indexes' => array( TABLE => rows ) )
+     */
+    function fetchDictionary()
+    {
+        $dictionary = array( 'columns' => array(), 'indexes' => array() );
+        $rows = $this->DBInstance->arrayQuery( eZOracleSchema::COLUMNS_QUERY . " JOIN user_tables t ON t.table_name = a.table_name ORDER BY a.table_name, a.column_id" );
+        foreach ( is_array( $rows ) ? $rows : array() as $row )
+        {
+            $dictionary['columns'][$row['table_name']][] = $row;
+        }
+        $rows = $this->DBInstance->arrayQuery( eZOracleSchema::INDEXES_QUERY );
+        foreach ( is_array( $rows ) ? $rows : array() as $row )
+        {
+            $dictionary['indexes'][$row['table_name']][] = $row;
+        }
+        return $dictionary;
     }
 
     /**
@@ -105,21 +146,19 @@ class eZOracleSchema extends eZDBSchemaInterface
         $oraStringTypes  = array( 'CHAR', 'VARCHAR2' );                        // FIXME: const
         $fields      = array();
 
-        $query = "SELECT   a.column_name AS col_name, " .
-                 "         decode (a.nullable, 'N', '1', 'Y', '0') AS not_null, " .
-                 "         a.data_type AS col_type, " .
-                 "         a.data_length AS col_size, " .
-                 "         a.char_length AS col_char_size, " .
-                 "         a.char_used AS col_char_used, " .
-                 "         a.data_default AS default_val, " .
-                 "         a.data_precision AS col_precision, " .
-                 "         a.data_scale AS col_scale " .
-                 "FROM     user_tab_columns a ".
-                 "WHERE    upper(a.table_name) = '$table' " .
-                 "ORDER BY a.column_id";
-
-        $resultArray = $this->DBInstance->arrayQuery( $query );
-        foreach( $resultArray as $row )
+        if ( is_array( $params ) && isset( $params['dictionary']['columns'] ) )
+        {
+            // read for all tables at once by schema()
+            $table = strtoupper( $table );
+            $resultArray = isset( $params['dictionary']['columns'][$table] ) ? $params['dictionary']['columns'][$table] : array();
+        }
+        else
+        {
+            // names are stored in upper case: no upper() on the column, so its index can be used
+            $query = eZOracleSchema::COLUMNS_QUERY . " WHERE a.table_name = '" . $this->DBInstance->escapeString( strtoupper( $table ) ) . "' ORDER BY a.column_id";
+            $resultArray = $this->DBInstance->arrayQuery( $query );
+        }
+        foreach( is_array( $resultArray ) ? $resultArray : array() as $row )
         {
             $colName     = strtolower( $row['col_name'] );
             // data_length is in bytes; a VARCHAR2(255 CHAR) column (the driver sets
@@ -215,7 +254,7 @@ class eZOracleSchema extends eZDBSchemaInterface
             $fields[$colName] =& $field;
             unset( $field );
         }
-        if ( $params['sort_columns'] )
+        if ( is_array( $params ) && !empty( $params['sort_columns'] ) )
         {
             ksort( $fields );
         }
@@ -229,16 +268,19 @@ class eZOracleSchema extends eZDBSchemaInterface
     function fetchTableIndexes( $table, $params=array() )
     {
         $indexes = array();
-        $query = "SELECT ui.index_name AS name, " .
-                 "       ui.index_type AS type, " .
-                 "       decode( ui.uniqueness, 'NONUNIQUE', 0, 'UNIQUE', 1 ) AS is_unique, " .
-                 "       uic.column_name AS col_name, " .
-                 "       uic.column_position AS col_pos " .
-                 "FROM user_indexes ui, user_ind_columns uic " .
-                 "WHERE ui.index_name = uic.index_name AND ui.table_name = '$table'";
-        $resultArray = $this->DBInstance->arrayQuery( $query );
+        if ( is_array( $params ) && isset( $params['dictionary']['indexes'] ) )
+        {
+            // read for all tables at once by schema()
+            $table = strtoupper( $table );
+            $resultArray = isset( $params['dictionary']['indexes'][$table] ) ? $params['dictionary']['indexes'][$table] : array();
+        }
+        else
+        {
+            $query = eZOracleSchema::INDEXES_QUERY . " AND ui.table_name = '" . $this->DBInstance->escapeString( strtoupper( $table ) ) . "'";
+            $resultArray = $this->DBInstance->arrayQuery( $query );
+        }
 
-        foreach( $resultArray as $row )
+        foreach( is_array( $resultArray ) ? $resultArray : array() as $row )
         {
             $idxName = strtolower( $row['name'] );
             if ( strpos( $idxName, 'sys_' ) === 0 )
@@ -259,7 +301,7 @@ class eZOracleSchema extends eZDBSchemaInterface
         {
             ksort( $index['fields'] );
         }
-        if ( $params['sort_indexes'] )
+        if ( is_array( $params ) && !empty( $params['sort_indexes'] ) )
         {
             ksort( $indexes );
         }
