@@ -131,7 +131,10 @@ class eZDFSFileHandlerOracleBackend
         // DFS setup
         if ( $this->dfsbackend === null )
         {
-            $this->dfsbackend = new eZDFSFileHandlerDFSBackend();
+            // the factory honours file.ini [eZDFSClusteringSettings] DFSBackend, as with MySQLi
+            $this->dfsbackend = class_exists( 'eZDFSFileHandlerBackendFactory' )
+                ? eZDFSFileHandlerBackendFactory::build()
+                : new eZDFSFileHandlerDFSBackend();
         }
     }
 
@@ -562,7 +565,7 @@ class eZDFSFileHandlerOracleBackend
         return $result;
     }
 
-    public function _exists( $filePath, $fname = false, $ignoreExpiredFiles = true )
+    public function _exists( $filePath, $fname = false, $ignoreExpiredFiles = true, $checkOnDFS = false )
     {
         if ( $fname )
             $fname .= "::_exists($filePath)";
@@ -577,7 +580,14 @@ class eZDFSFileHandlerOracleBackend
         }
         /// @todo should not we check 'expired', too?
         /// @todo fix this before enabling logical deletes: only test if $ignoreExpiredFiles
-        return $row['mtime'] >= 0;
+        $rc = $row['mtime'] >= 0;
+
+        // eZDFSFileHandler::fileExists( $path, true ) asks for the file on the DFS too
+        if ( $checkOnDFS && $rc )
+        {
+            $rc = $this->dfsbackend->existsOnDFS( $filePath );
+        }
+        return $rc;
     }
 
     protected function __mkdir_p( $dir )
@@ -746,7 +756,7 @@ class eZDFSFileHandlerOracleBackend
      * @param string $filePath
      * @deprecated should not be used since it cannot handle reading errors
      **/
-    public function _passThrough( $filePath, $fname = false )
+    public function _passThrough( $filePath, $startOffset = 0, $length = false, $fname = false )
     {
         if ( $fname )
             $fname .= "::_passThrough($filePath)";
@@ -759,7 +769,8 @@ class eZDFSFileHandlerOracleBackend
             return false;
 
         // @todo Catch an exception
-        $this->dfsbackend->passthrough( $filePath );
+        // the offset and length of an HTTP range request (eZDFSFileHandler::passthrough())
+        $this->dfsbackend->passthrough( $filePath, $startOffset, $length );
 
         return true;
     }
@@ -1029,19 +1040,34 @@ class eZDFSFileHandlerOracleBackend
         return true;
     }
 
-    public function _getFileList( $scopes = false, $excludeScopes = false )
+    public function _getFileList( $scopes = false, $excludeScopes = false, $limit = false, $path = false )
     {
         $query = 'SELECT name FROM ' . self::TABLE_METADATA;
+        $conditions = array();
+        $bindparams = array();
 
         if ( is_array( $scopes ) && count( $scopes ) > 0 )
         {
-            $query .= ' WHERE scope ';
-            if ( $excludeScopes )
-                $query .= 'NOT ';
-            $query .= "IN ('" . implode( "', '", $scopes ) . "')";
+            $conditions[] = 'scope ' . ( $excludeScopes ? 'NOT ' : '' ) .
+                            "IN ('" . implode( "', '", array_map( function( $scope ) { return str_replace( "'", "''", $scope ); }, $scopes ) ) . "')";
+        }
+        // the files below $path only (eZDFSFileHandler::getFileList(), as with MySQLi)
+        if ( $path != false )
+        {
+            $conditions[] = 'name LIKE :path';
+            $bindparams[':path'] = $path . '%';
+        }
+        if ( count( $conditions ) > 0 )
+        {
+            $query .= ' WHERE ' . implode( ' AND ', $conditions );
+        }
+        // $limit is array( offset, count )
+        if ( is_array( $limit ) && array_sum( $limit ) )
+        {
+            $query .= ' ORDER BY name OFFSET ' . (int)$limit[0] . ' ROWS FETCH NEXT ' . (int)$limit[1] . ' ROWS ONLY';
         }
 
-        $rows = $this->_query( $query, "_getFileList( array( " . implode( ', ', $scopes ) . " ), $excludeScopes )", true, array(), self::RETURN_DATA );
+        $rows = $this->_query( $query, "_getFileList( array( " . implode( ', ', is_array( $scopes ) ? $scopes : array() ) . " ), $excludeScopes )", true, $bindparams, self::RETURN_DATA );
         if ( $rows === false )
         {
             eZDebug::writeDebug( 'Unable to get file list', __METHOD__ );
@@ -1073,8 +1099,15 @@ class eZDFSFileHandlerOracleBackend
         {
             $error = oci_error();
         }
-        eZDebug::writeError( $sql, "$msg: " . $error['message'] );
-        eZDebug::writeError( self::$dbparams, "$msg: " . $error['message'] );
+        $message = is_array( $error ) ? $error['message'] : 'no Oracle error';
+        eZDebug::writeError( $sql, "$msg: " . $message );
+        // the connection settings, without the password (the log is no place for it)
+        $params = self::$dbparams;
+        if ( is_array( $params ) && isset( $params['pass'] ) )
+        {
+            $params['pass'] = '***';
+        }
+        eZDebug::writeError( $params, "$msg: " . $message );
     }
 
     /**
@@ -1709,7 +1742,7 @@ class eZDFSFileHandlerOracleBackend
      *
      * @todo reenable this logic before moving to logical deletions
      */
-    public function expiredFilesList( $scopes, $limit = array( 0, 100 ) )
+    public function expiredFilesList( $scopes, $limit = array( 0, 100 ), $expiry = false )
     {
         /*if ( count( $scopes ) == 0 )
            throw new ezcBaseValueException( 'scopes', $scopes, "array of scopes", "parameter" );
@@ -1732,6 +1765,24 @@ class eZDFSFileHandlerOracleBackend
         return array();
     }
 
+    /**
+     * Transforms $filePath so that it contains a valid href to the file, wherever it is stored.
+     * eZDFSFileHandler::applyServerUri() calls this for every URL (eZURI) when DFS
+     * clustering is on; without it the page ended in "Call to undefined method".
+     *
+     * @param string $filePath
+     * @return string
+     */
+    public function applyServerUri( $filePath )
+    {
+        if ( $this->dfsbackend === null )
+        {
+            $this->dfsbackend = class_exists( 'eZDFSFileHandlerBackendFactory' )
+                ? eZDFSFileHandlerBackendFactory::build()
+                : new eZDFSFileHandlerDFSBackend();
+        }
+        return method_exists( $this->dfsbackend, 'applyServerUri' ) ? $this->dfsbackend->applyServerUri( $filePath ) : $filePath;
+    }
 
     /**
      * Similar to eZDFSFileHandler::purge()
