@@ -34,15 +34,17 @@ class ezpDfsOracleClusterGateway extends ezpClusterGateway
         $query = "SELECT filesize, datatype, mtime FROM ezdfsfile WHERE name_hash = :name_hash";
         if ( !$statement = oci_parse( $this->db, $query ) )
         {
-            $error = oci_error();
+            $error = oci_error( $this->db );
             throw new RuntimeException( "Failed to fetch file metadata for '$filepath' " .
                 "(error #{$error['code']}: {$error['message']})" );
         }
 
-        oci_bind_by_name( $statement, ':name_hash', md5( $filepath ), -1 );
+        // oci_bind_by_name() binds a variable (by reference), not a value
+        $nameHash = md5( $filepath );
+        oci_bind_by_name( $statement, ':name_hash', $nameHash, -1 );
         if ( !oci_execute( $statement, OCI_DEFAULT ) )
         {
-            $error = oci_error();
+            $error = oci_error( $statement );
             throw new RuntimeException( "Failed to fetch file metadata for '$filepath' " .
                 "(error #{$error['code']}: {$error['message']})" );
         }
