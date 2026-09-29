@@ -10,12 +10,12 @@
         },
         {
             "name": "eZ Publish dev-team & eZ Community",
-            "homepage": "https://github.com/se7enxweb/ezwebin-extension"
+            "homepage": "https://github.com/se7enxweb/ezoracle"
         }
     ],
     "minimum-stability": "dev",
     "require": {
-        "se7enxweb/ezpublish-legacy-installer": "*"
+        "se7enxweb/exponential-legacy-installer": "*"
     },
     "extra": {
         "ezpublish-legacy-extension-name": "ezoracle"
