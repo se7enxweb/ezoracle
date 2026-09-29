@@ -41,7 +41,7 @@ class eZOracleSchema extends eZDBSchemaInterface
     const COLUMNS_QUERY = "SELECT   a.table_name AS table_name, a.column_name AS col_name, decode (a.nullable, 'N', '1', 'Y', '0') AS not_null, a.data_type AS col_type, a.data_length AS col_size, a.char_length AS col_char_size, a.char_used AS col_char_used, a.data_default AS default_val, a.data_precision AS col_precision, a.data_scale AS col_scale FROM user_tab_columns a";
 
     /// the indexes of the tables, for fetchTableIndexes() (an AND may follow)
-    const INDEXES_QUERY = "SELECT ui.table_name AS table_name, ui.index_name AS name, ui.index_type AS type, decode( ui.uniqueness, 'NONUNIQUE', 0, 'UNIQUE', 1 ) AS is_unique, uic.column_name AS col_name, uic.column_position AS col_pos FROM user_indexes ui, user_ind_columns uic WHERE ui.index_name = uic.index_name";
+    const INDEXES_QUERY = "SELECT ui.table_name AS table_name, ui.index_name AS name, ui.index_type AS type, decode( ui.uniqueness, 'NONUNIQUE', 0, 'UNIQUE', 1 ) AS is_unique, uic.column_name AS col_name, uic.column_position AS col_pos FROM user_indexes ui, user_ind_columns uic WHERE ui.index_name = uic.index_name AND ui.index_type NOT LIKE 'FUNCTION-BASED%'";
 
     public function __construct( $params )
     {
@@ -678,7 +678,7 @@ class eZOracleSchema extends eZDBSchemaInterface
      * Cuts given identifier to the specified length providing uniqueness of all
      * shortened identifiers.
      */
-    function shorten( $identifier, $length = 30 )
+    static function shorten( $identifier, $length = 30 )
     {
         if( strlen( $identifier ) <= $length )
             return $identifier;
