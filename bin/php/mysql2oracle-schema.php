@@ -228,14 +228,14 @@ function getColumnTypeOverride( $table, $col )
 function myFetchTablesList( $mydb )
 {
     $tables = array();
-    $result = mysql_query("SHOW TABLES");
+    $result = mysqli_query( $mydb, "SHOW TABLES" );
 
-    while ( $row = mysql_fetch_array( $result, MYSQL_NUM ) )
+    while ( $row = mysqli_fetch_array( $result, MYSQLI_NUM ) )
     {
         //printf ("ID: %s  Name: %s", $row["id"], $row["name"]);
         $array[] = $row[0];
     }
-    mysql_free_result($result);
+    mysqli_free_result($result);
     return $array;
 }
 
@@ -261,11 +261,11 @@ function myColHasNotNullOverride( $tableName, $columnName )
 function myGetColumnsList( $mydb, $table )
 {
     // create columns list
-    $rsltCols = mysql_query("show columns from $table", $mydb);
+    $rsltCols = mysqli_query( $mydb, "show columns from $table" );
     $columns = array();
-    while ($row = mysql_fetch_array($rsltCols, MYSQL_ASSOC))
+    while ($row = mysqli_fetch_array($rsltCols, MYSQLI_ASSOC))
         $columns[] = $row;
-    mysql_free_result($rsltCols);
+    mysqli_free_result($rsltCols);
     return $columns;
 }
 
@@ -332,7 +332,7 @@ function dumpColumnSchema( $table, $col, &$primaryKey, &$autoIncrement )
     }
     else // numeric column
     {
-        if( "${col['Default']}" !== "" )
+        if( (string)$col['Default'] !== "" )
             $colDef .= " DEFAULT ". $col['Default'];  // strings should be enclosed in quotes
         if ( $col['Null'] !== 'YES' )
             $colDef .= ' NOT NULL';
@@ -354,10 +354,10 @@ function dumpColumnSchema( $table, $col, &$primaryKey, &$autoIncrement )
 */
 function appendTableIndexes( $mydb, $table, &$indexes )
 {
-    $rsltCols = mysql_query("show index from $table", $mydb);
+    $rsltCols = mysqli_query( $mydb, "show index from $table" );
     $tableIndexes = array();
 
-    while ($row = mysql_fetch_array($rsltCols, MYSQL_ASSOC))
+    while ($row = mysqli_fetch_array($rsltCols, MYSQLI_ASSOC))
     {
         $idxRef =& $tableIndexes[ $table ][ $row['Key_name'] ];
         $idxRef['columns'][] = getColumnAlias( $table, $row['Column_name'] );
@@ -365,7 +365,7 @@ function appendTableIndexes( $mydb, $table, &$indexes )
         $idxRef['unique']    = !$row['Non_unique'];
     }
     $indexes = array_merge( $indexes,  $tableIndexes );
-    mysql_free_result($rsltCols);
+    mysqli_free_result($rsltCols);
 }
 
 /**
@@ -595,16 +595,21 @@ if ( !parseMysqlLoginString( $loginString,
                             $myDBName, $myUser, $myPass, $myHost ) )
     die( "Malformed login string\n" );
 
-if ( !function_exists( 'mysql_connect' )  )
-    die( "MySQL extension not activated, cannot execute\n" );
+if ( !function_exists( 'mysqli_connect' ) )
+    die( "MySQLi extension not activated, cannot execute\n" );
 
-if ( !( $mydb = @mysql_connect( $myHost, $myUser, $myPass ) ) )
-    die( "cannot connect to MySQL: " . mysql_error() . "\n" );
+// the host may carry a port: host:port
+list( $myHostName, $myPort ) = array_pad( explode( ':', $myHost, 2 ), 2, null );
+mysqli_report( MYSQLI_REPORT_OFF );
+if ( !( $mydb = @mysqli_connect( $myHostName, $myUser, $myPass, '', $myPort !== null ? (int)$myPort : null ) ) )
+    die( "cannot connect to MySQL: " . mysqli_connect_error() . "\n" );
 
-if ( !@mysql_select_db( $myDBName, $mydb ) )
-    die( "cannot select database `$myDBName': " . mysql_error() . "\n" );
+if ( !@mysqli_select_db( $mydb, $myDBName ) )
+    die( "cannot select database `$myDBName': " . mysqli_error( $mydb ) . "\n" );
+
+mysqli_set_charset( $mydb, 'utf8mb4' );
 
 echo dumpOracleSchema( $mydb, $optDrop );
 
-mysql_close( $mydb );
+mysqli_close( $mydb );
 ?>

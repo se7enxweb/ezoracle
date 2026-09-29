@@ -83,10 +83,10 @@ function parseOracleLoginString( $loginString, &$oraUser, &$oraPass, &$oraInst )
 */
 function mySelectOneVar( $mydb, $query )
 {
-    $result = mysql_query($query, $mydb);
-    $row    = mysql_fetch_row( $result );
+    $result = mysqli_query( $mydb, $query );
+    $row    = mysqli_fetch_row( $result );
     $val    = $row[0];
-    mysql_free_result($result);
+    mysqli_free_result($result);
     return $val;
 }
 
@@ -105,16 +105,16 @@ function getColumnAlias( $table, $col )
 function myGetTablesList( $mydb )
 {
     $tables = array();
-    if( !( $result = mysql_query( "SHOW TABLES", $mydb ) ) )
+    if( !( $result = mysqli_query( $mydb, "SHOW TABLES" ) ) )
     {
-        echo mysql_error();
+        echo mysqli_error( $mydb );
         return false;
     }
 
-    while ( $row = mysql_fetch_row( $result ) )
+    while ( $row = mysqli_fetch_row( $result ) )
         $tables[] = $row[0];
 
-    mysql_free_result( $result );
+    mysqli_free_result( $result );
     return $tables;
 }
 
@@ -125,10 +125,10 @@ function oraDeleteTableData( $oradb, $table )
 {
     echo "Deleting old Oracle data from table $table.\n";
     // Truncate is faster than delete
-    //$deleteStmt = OCIParse( $oradb, "DELETE FROM $table" );
-    $deleteStmt = OCIParse( $oradb, "TRUNCATE TABLE $table" );
-    OCIExecute( $deleteStmt );
-    OCIFreeStatement( $deleteStmt );
+    //$deleteStmt = oci_parse( $oradb, "DELETE FROM $table" );
+    $deleteStmt = oci_parse( $oradb, "TRUNCATE TABLE $table" );
+    oci_execute( $deleteStmt );
+    oci_free_statement( $deleteStmt );
 }
 
 /**
@@ -137,14 +137,14 @@ function oraDeleteTableData( $oradb, $table )
 function myGetTableColumnsList( $mydb, $table )
 {
     $columns = array();
-    $mysqlColumns = mysql_query( "SHOW COLUMNS FROM $table", $mydb );
-    while ( $column = mysql_fetch_array($mysqlColumns) )
+    $mysqlColumns = mysqli_query( $mydb, "SHOW COLUMNS FROM $table" );
+    while ( $column = mysqli_fetch_array($mysqlColumns) )
     {
         $colname = $column['Field'];
         $coltype = $column['Type'];
         $columns[$colname] = $coltype;
     }
-    mysql_free_result($mysqlColumns);
+    mysqli_free_result($mysqlColumns);
     return $columns;
 }
 
@@ -184,7 +184,7 @@ function createOracleInsertQuery( $tableName, &$columns, $oraColums = array() )
             /* If datatype of the current column alias is 'clob'
              * we should not add it to Insert Query at the moment but should store it afterwords,
              * i.e. we should add 'clob' columns to the end of Insert Query otherwise we'll get the error:
-             * "ORA-24816: Expanded non LONG bind data supplied after actual LONG or LOB column" when we call OCIExecute()
+             * "ORA-24816: Expanded non LONG bind data supplied after actual LONG or LOB column" when we call oci_execute()
              */
             $clobColumns[] = $columnsAliases[$i];
         }
@@ -234,15 +234,15 @@ function copyData( $mydb, $oradb, $tableName )
     echo "Copying $tableName data ($nRows rows) from MySQL to Oracle.\n";
 
     // Determine Oracle's table schema.
-    $tableSchemaStmt = OCIParse(
+    $tableSchemaStmt = oci_parse(
         $oradb,
         "SELECT column_name,data_type,data_length " .
         "FROM user_tab_columns WHERE LOWER(table_name)='$tableName'"
         );
 
     if ( !$tableSchemaStmt ||
-         !OCIExecute( $tableSchemaStmt ) ||
-         !OCIFetchStatement( $tableSchemaStmt, $resTableSchema ) )
+         !oci_execute( $tableSchemaStmt ) ||
+         !oci_fetch_all( $tableSchemaStmt, $resTableSchema ) )
     {
         die( "Failed to get schema for table '$tableName'\n" );
     }
@@ -254,7 +254,7 @@ function copyData( $mydb, $oradb, $tableName )
         $oraColums[strtolower( $resTableSchema['COLUMN_NAME'][$i] )] = strtolower( $resTableSchema['DATA_TYPE'][$i] );
     }
     $insertQuery = createOracleInsertQuery( $tableName, $columns, $oraColums );
-    $insertStmt = OCIParse( $oradb, $insertQuery );
+    $insertStmt = oci_parse( $oradb, $insertQuery );
 
     // Perform initial binding.
     $oraRow = array();
@@ -274,23 +274,23 @@ function copyData( $mydb, $oradb, $tableName )
                                        'is_blob' => $colIsBlob );
         if ( $colIsBlob )
         {
-            $oraRow[$colAlias] = OCINewDescriptor( $oradb, OCI_D_LOB );
-            OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], -1, OCI_B_BLOB );
+            $oraRow[$colAlias] = oci_new_descriptor( $oradb, OCI_D_LOB );
+            oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], -1, OCI_B_BLOB );
         }
         elseif ( !strcasecmp( $colType, 'clob' ) )
         {
-            OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], 2147483647 ); // 2^31 (2GB-1)
-            //OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], 4294967296 ); // 2^32 (4GB)
-            //OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], 2147483647 ); // 2^31 (4GB-1)
-            //OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], $oraSchema[$colAlias]['size'] );
+            oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], 2147483647 ); // 2^31 (2GB-1)
+            //oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], 4294967296 ); // 2^32 (4GB)
+            //oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], 2147483647 ); // 2^31 (4GB-1)
+            //oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], $oraSchema[$colAlias]['size'] );
             //die( "CLOB size: " . $colSize . "($colName)\n" );
-            //OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], -1 );
+            //oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], -1 );
         }
         else
         {
             $oraRow[$colAlias] = 0;
-            //OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], -1 );
-            OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], $oraSchema[$colAlias]['size'] );
+            //oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], -1 );
+            oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], $oraSchema[$colAlias]['size'] );
         }
     }
 
@@ -300,25 +300,25 @@ function copyData( $mydb, $oradb, $tableName )
     $nRowsProcessed = 0;
     for( $offset = 0; $offset < $nRows; $offset += $limit )
     {
-        $result = mysql_query("SELECT * FROM $tableName LIMIT $offset, $limit", $mydb);
-        while ( $row1 = mysql_fetch_array( $result, MYSQL_ASSOC ) )
+        $result = mysqli_query( $mydb, "SELECT * FROM $tableName LIMIT $offset, $limit" );
+        while ( $row1 = mysqli_fetch_array( $result, MYSQLI_ASSOC ) )
         {
             foreach ( array_keys($row1) as $col )
             {
                 $colAlias = getColumnAlias( $tableName, $col );
                 if ( $oraSchema[$colAlias]['is_blob'] )
                 {
-                    //OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], -1, OCI_B_BLOB );
+                    //oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], -1, OCI_B_BLOB );
                 }
                 else
                 {
                     $oraRow[$colAlias] = $row1[$col];
-                    //OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], $oraSchema[$colAlias]['size'] );
-                    //OCIBindByName( $insertStmt, ":$colAlias", $oraRow[$colAlias], -1 );
+                    //oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], $oraSchema[$colAlias]['size'] );
+                    //oci_bind_by_name( $insertStmt, ":$colAlias", $oraRow[$colAlias], -1 );
                 }
             }
 
-            $rc = OCIExecute( $insertStmt, OCI_DEFAULT ); // don't commit automatically
+            $rc = oci_execute( $insertStmt, OCI_DEFAULT ); // don't commit automatically
             if ( $rc === false )
             {
                 echo "Failed query: $insertQuery\n";
@@ -338,13 +338,13 @@ function copyData( $mydb, $oradb, $tableName )
             if ( ( $nRowsProcessed % 1000 ) == 0 )
                 printf( "%02d%%|", $nRowsProcessed/$nRows*100 );
         }
-        OCICommit( $oradb ); // commit all uncommitted data (if any)
-        mysql_free_result( $result );
+        oci_commit( $oradb ); // commit all uncommitted data (if any)
+        mysqli_free_result( $result );
     }
 
     echo "\n";
 
-    OCIFreeStatement( $insertStmt );
+    oci_free_statement( $insertStmt );
 
     foreach ( $oraSchema as $colAlias => $colSchema )
     {
@@ -376,36 +376,39 @@ if ( !parseOracleLoginString( $argv[2], $oraUser, $oraPass, $oraInst ) )
 
 // connect to mysql
 
-if ( !function_exists( 'mysql_connect' )  )
-    die( "MySQL extension not activated, cannot execute\n" );
+if ( !function_exists( 'mysqli_connect' ) )
+    die( "MySQLi extension not activated, cannot execute\n" );
 
-if ( !( $mydb = mysql_connect ( $myHost, $myUser, $myPass ) ) )
-    die( "cannot connect to MySQL\n" );
+// the host may carry a port: host:port
+list( $myHostName, $myPort ) = array_pad( explode( ':', $myHost, 2 ), 2, null );
+mysqli_report( MYSQLI_REPORT_OFF );
+if ( !( $mydb = @mysqli_connect( $myHostName, $myUser, $myPass, '', $myPort !== null ? (int)$myPort : null ) ) )
+    die( "cannot connect to MySQL: " . mysqli_connect_error() . "\n" );
 
-if( !mysql_select_db( $myDBName, $mydb ) )
-    die( "Could not select database: " . mysql_error() . "\n" );
+if( !mysqli_select_db( $mydb, $myDBName ) )
+    die( "Could not select database: " . mysqli_error( $mydb ) . "\n" );
 
-mysql_query("SET NAMES utf8", $mydb);
+mysqli_set_charset( $mydb, 'utf8mb4' );
 
 // connect to oracle
 
-if ( !function_exists( 'OCILogon' )  )
+if ( !function_exists( 'oci_connect' ) )
     die( "Oci8 extension not activated, cannot execute\n" );
 
-if ( !( $oradb = OCILogon( $oraUser, $oraPass, $oraInst, 'AL32UTF8' ) ) )
+if ( !( $oradb = oci_connect( $oraUser, $oraPass, $oraInst, 'AL32UTF8' ) ) )
     die( "cannot connect to Oracle\n" );
 
 // make sure we use the correct numeric format for floats
-$alterStmt = OCIParse( $oradb, "ALTER SESSION SET NLS_NUMERIC_CHARACTERS='. '" );
-OCIExecute( $alterStmt );
-OCIFreeStatement( $alterStmt );
+$alterStmt = oci_parse( $oradb, "ALTER SESSION SET NLS_NUMERIC_CHARACTERS='. '" );
+oci_execute( $alterStmt );
+oci_free_statement( $alterStmt );
 
 $mysqlTables = myGetTablesList( $mydb );
 foreach ( $mysqlTables as $mysqlTable )
     copyData( $mydb, $oradb, $mysqlTable );
 
-OCILogOff( $oradb );
-mysql_close($mydb);
+oci_close( $oradb );
+mysqli_close($mydb);
 echo "Finished.\n";
 
 ?>
