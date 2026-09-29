@@ -78,6 +78,11 @@ class eZOracleDB extends eZDBInterface
 
         $ini = eZINI::instance();
 
+        if ( $ini->hasVariable( 'DatabaseSettings', 'OracleEmptyStringForNull' ) )
+        {
+            $this->EmptyStringForNullText = $ini->variable( 'DatabaseSettings', 'OracleEmptyStringForNull' ) !== 'disabled';
+        }
+
         if ( function_exists( "oci_connect" ) )
         {
             $this->Mode = OCI_COMMIT_ON_SUCCESS;
@@ -455,17 +460,20 @@ class eZOracleDB extends eZDBInterface
         {
             if ( isset( $params["limit"] ) and is_numeric( $params["limit"] ) )
             {
-                $limit = $params["limit"];
+                $limit = (int)$params["limit"];
             }
             if ( isset( $params["offset"] ) and is_numeric( $params["offset"] ) )
             {
-                $offset = $params["offset"];
+                $offset = max( 0, (int)$params["offset"] );
             }
             if ( isset( $params["column"] ) and ( is_numeric( $params["column"] ) or is_string( $params["column"]) ) )
             {
                 $column = strtoupper( $params["column"] );
             }
         }
+
+        $fetchOffset = $offset;
+        $fetchLimit = $limit;
         eZDebug::accumulatorStart( 'oracle_query', 'oracle_total', 'Oracle_queries' );
 //        if ( $this->OutputSQL )
 //            $this->startTimer();
@@ -525,20 +533,37 @@ class eZOracleDB extends eZDBInterface
             }
         }
 
-        //$numCols = oci_num_fields( $statement );
         $results = array();
 
         eZDebug::accumulatorStart( 'oracle_loop', 'oracle_total', 'Oracle looping results' );
+
+        // Oracle stores '' as NULL; the text columns give '' back, as the other
+        // drivers do for the empty strings the application wrote
+        $textColumns = $this->EmptyStringForNullText ? $this->textColumnNames( $statement ) : array();
 
         if ( $column !== false )
         {
             if ( is_numeric( $column ) )
             {
-               $rowCount = oci_fetch_all( $statement, $results, $offset, $limit, OCI_FETCHSTATEMENT_BY_COLUMN + OCI_NUM );
+               $rowCount = oci_fetch_all( $statement, $results, $fetchOffset, $fetchLimit, OCI_FETCHSTATEMENT_BY_COLUMN + OCI_NUM );
             }
             else
             {
-                $rowCount = oci_fetch_all( $statement, $results, $offset, $limit, OCI_FETCHSTATEMENT_BY_COLUMN + OCI_ASSOC );
+                $rowCount = oci_fetch_all( $statement, $results, $fetchOffset, $fetchLimit, OCI_FETCHSTATEMENT_BY_COLUMN + OCI_ASSOC );
+            }
+
+            if ( $rowCount > 0 && !isset( $results[$column] ) )
+            {
+                eZDebug::writeError( "Column '$column' is not in the result of the query", __METHOD__ );
+                $rowCount = 0;
+            }
+            else if ( $rowCount > 0 && isset( $textColumns[$column] ) )
+            {
+                foreach ( $results[$column] as $i => $value )
+                {
+                    if ( $value === null )
+                        $results[$column][$i] = '';
+                }
             }
 
             // optimize to our best the special case: 1 row
@@ -558,7 +583,18 @@ class eZOracleDB extends eZDBInterface
         }
         else
         {
-            $rowCount = oci_fetch_all( $statement, $results, $offset, $limit, OCI_FETCHSTATEMENT_BY_ROW + OCI_ASSOC );
+            $rowCount = oci_fetch_all( $statement, $results, $fetchOffset, $fetchLimit, OCI_FETCHSTATEMENT_BY_ROW + OCI_ASSOC );
+            if ( $rowCount > 0 && count( $textColumns ) > 0 )
+            {
+                foreach ( $results as $i => $row )
+                {
+                    foreach ( $textColumns as $name => $true )
+                    {
+                        if ( array_key_exists( $name, $row ) && $row[$name] === null )
+                            $results[$i][$name] = '';
+                    }
+                }
+            }
             // optimize to our best the special case: 1 row
             if ( $rowCount == 1 )
             {
@@ -579,6 +615,7 @@ class eZOracleDB extends eZDBInterface
                 {
                     self::arrayChangeKeys( $val, $key, $arr );
                 }
+                unset( $val );
                 $resultArray = $offset == 0 ? $results : array_combine( range( $offset, $offset + $rowCount - 1 ), $results );
             }
         }
@@ -587,6 +624,29 @@ class eZOracleDB extends eZDBInterface
         oci_free_statement( $statement );
 
         return $resultArray;
+    }
+
+    /**
+     * The columns of an executed statement that hold text (CHAR, VARCHAR2,
+     * CLOB and their national variants), by upper-case name and by position.
+     *
+     * @param resource $statement
+     * @return array name|position => true
+     */
+    function textColumnNames( $statement )
+    {
+        $textColumns = array();
+        $count = oci_num_fields( $statement );
+        for ( $i = 1; $i <= $count; ++$i )
+        {
+            $type = oci_field_type( $statement, $i );
+            if ( in_array( $type, array( 'CHAR', 'VARCHAR2', 'VARCHAR', 'NCHAR', 'NVARCHAR2', 'CLOB', 'NCLOB', 'LONG' ), true ) )
+            {
+                $textColumns[oci_field_name( $statement, $i )] = true;
+                $textColumns[$i - 1] = true;
+            }
+        }
+        return $textColumns;
     }
 
     /**
@@ -1500,6 +1560,8 @@ class eZOracleDB extends eZDBInterface
     var $BindVariableArray = array();
     /// NLS_CHARACTERSET of the database, read once (see databaseCharset())
     public $DatabaseCharset = null;
+    /// NULL in text columns is returned as '' (site.ini [DatabaseSettings] OracleEmptyStringForNull)
+    public $EmptyStringForNullText = true;
 
     // @todo move this to a static var, and we should shave off a little ram...
     var $CharsetsMap = array(
