@@ -472,8 +472,25 @@ class eZOracleDB extends eZDBInterface
             }
         }
 
+        // Let the database skip and cut the rows (Oracle 12.1 and later) instead
+        // of fetching every row up to the offset and dropping them in oci8.
+        // The keys of the result still start at the offset, as in the other drivers.
         $fetchOffset = $offset;
         $fetchLimit = $limit;
+        if ( ( $offset > 0 || $limit >= 0 ) && $this->canAppendRowLimit( $sql ) )
+        {
+            $sql = rtrim( $sql );
+            if ( $offset > 0 )
+            {
+                $sql .= "\nOFFSET $offset ROWS";
+            }
+            if ( $limit >= 0 )
+            {
+                $sql .= "\nFETCH NEXT $limit ROWS ONLY";
+            }
+            $fetchOffset = 0;
+            $fetchLimit = -1;
+        }
         eZDebug::accumulatorStart( 'oracle_query', 'oracle_total', 'Oracle_queries' );
 //        if ( $this->OutputSQL )
 //            $this->startTimer();
@@ -624,6 +641,36 @@ class eZOracleDB extends eZDBInterface
         oci_free_statement( $statement );
 
         return $resultArray;
+    }
+
+    /**
+     * True when OFFSET ... ROWS / FETCH NEXT ... ROWS ONLY can be put at the end
+     * of $sql: a plain query (SELECT or WITH), on Oracle 12.1 or later, that has
+     * no row limiting clause and no FOR UPDATE of its own.
+     *
+     * @param string $sql
+     * @return bool
+     */
+    function canAppendRowLimit( $sql )
+    {
+        if ( $this->ServerMajorVersion === null )
+        {
+            $version = $this->databaseServerVersion();
+            $this->ServerMajorVersion = $version ? (int)$version['values'][0] : 0;
+        }
+        if ( $this->ServerMajorVersion < 12 )
+        {
+            return false;
+        }
+        if ( !preg_match( '/^[\s(]*(SELECT|WITH)\b/i', $sql ) )
+        {
+            return false;
+        }
+        if ( preg_match( '/\bFOR\s+UPDATE\b|\bFETCH\s+(FIRST|NEXT)\b|\bOFFSET\s+\S+\s+ROWS?\b|;\s*$/i', $sql ) )
+        {
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -1560,6 +1607,8 @@ class eZOracleDB extends eZDBInterface
     var $BindVariableArray = array();
     /// NLS_CHARACTERSET of the database, read once (see databaseCharset())
     public $DatabaseCharset = null;
+    /// major version of the server, read once (see canAppendRowLimit())
+    public $ServerMajorVersion = null;
     /// NULL in text columns is returned as '' (site.ini [DatabaseSettings] OracleEmptyStringForNull)
     public $EmptyStringForNullText = true;
 
