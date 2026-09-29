@@ -3,11 +3,12 @@
 ImplementationAlias[oracle]=eZOracleDB
 ImplementationAlias[ezoracle]=eZOracleDB
 
-# Oracle stores the empty string as NULL. With enabled (the default) the
-# driver returns '' for NULL in text columns (CHAR, VARCHAR2, CLOB), as the
-# other databases return the empty strings the application wrote.
-# disabled returns NULL as Oracle has it.
-OracleEmptyStringForNull=enabled
+# Oracle stores the empty string as NULL. disabled (the default) returns NULL
+# as Oracle has it. enabled returns '' for NULL in text columns (CHAR,
+# VARCHAR2, CLOB and their N variants), as the other databases return the
+# empty strings the application wrote; real NULLs in text columns then read
+# as '' too. Numeric and other columns always keep NULL.
+OracleEmptyStringForNull=disabled
 
 # Example configuration for connecting to an oracle db
 #DatabaseImplementation=ezoracle

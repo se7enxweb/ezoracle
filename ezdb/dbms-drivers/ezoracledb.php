@@ -80,7 +80,7 @@ class eZOracleDB extends eZDBInterface
 
         if ( $ini->hasVariable( 'DatabaseSettings', 'OracleEmptyStringForNull' ) )
         {
-            $this->EmptyStringForNullText = $ini->variable( 'DatabaseSettings', 'OracleEmptyStringForNull' ) !== 'disabled';
+            $this->EmptyStringForNullText = $ini->variable( 'DatabaseSettings', 'OracleEmptyStringForNull' ) === 'enabled';
         }
 
         if ( function_exists( "oci_connect" ) )
@@ -1616,7 +1616,7 @@ class eZOracleDB extends eZDBInterface
     /// major version of the server, read once (see canAppendRowLimit())
     public $ServerMajorVersion = null;
     /// NULL in text columns is returned as '' (site.ini [DatabaseSettings] OracleEmptyStringForNull)
-    public $EmptyStringForNullText = true;
+    public $EmptyStringForNullText = false;
 
     // @todo move this to a static var, and we should shave off a little ram...
     var $CharsetsMap = array(
