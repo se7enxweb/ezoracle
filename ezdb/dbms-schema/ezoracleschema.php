@@ -132,6 +132,13 @@ class eZOracleSchema extends eZDBSchemaInterface
             {
                 // strip trailing spaces
                 $colDefault = rtrim( $colDefault );
+                // no default: the driver can return NULL of the LONG data_default
+                // column as '' (OracleEmptyStringForNull), and a default of '' does
+                // not exist in Oracle anyway ('' is NULL)
+                if ( $colDefault === '' )
+                {
+                    $colDefault = null;
+                }
             }
 
             if ( $isAutoIncCol )
