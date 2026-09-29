@@ -624,10 +624,83 @@ class eZOracleSchema extends eZDBSchemaInterface
      */
     function shorten( $identifier, $length = 30 )
     {
-        static $cnt = 1;
         if( strlen( $identifier ) <= $length )
             return $identifier;
-        return substr( $identifier, 0, $length-5 ) . sprintf( "%05d", $cnt++ );
+        // the suffix is derived from the full name, so the same schema always
+        // gets the same names (a counter made them depend on the order of calls)
+        return substr( $identifier, 0, $length - 6 ) . '_' . substr( md5( $identifier ), 0, 5 );
+    }
+
+    /**
+     * Works out the Oracle name of every index of $schema (generic names, 'local'
+     * structure otherwise), as [table][generic index name] => local name.
+     *
+     * MySQL index names are unique per table, Oracle ones per schema, and they
+     * share the namespace of tables, sequences and views: the .dba files of the
+     * kernel and the extensions reuse names across tables (cjw_newsletter has
+     * 'contentobject_attribute_id' on several), which failed with ORA-00955.
+     * A name that is used by another table of $schema, or by an object of the
+     * connected database that is not an index of the same table, becomes
+     * <table>_<name>. Names longer than 30 bytes are shortened (the limit of
+     * Oracle before 12.2). Primary keys are unnamed and not listed.
+     *
+     * @param array $schema
+     * @return array
+     */
+    function schemaUniqueIndexNames( $schema )
+    {
+        // names already in the database: name => table of the index, or '' for other objects
+        $existing = array();
+        if ( is_object( $this->DBInstance ) && method_exists( $this->DBInstance, 'isConnected' ) && $this->DBInstance->isConnected() )
+        {
+            $rows = $this->DBInstance->arrayQuery( "SELECT o.object_name AS name, i.table_name AS table_name " .
+                                                   "FROM user_objects o LEFT JOIN user_indexes i ON i.index_name = o.object_name " .
+                                                   "WHERE o.object_type IN ( 'TABLE', 'INDEX', 'SEQUENCE', 'VIEW', 'SYNONYM' ) AND o.object_name NOT LIKE 'BIN$%'" );
+            foreach ( is_array( $rows ) ? $rows : array() as $row )
+            {
+                $existing[strtolower( $row['name'] )] = strtolower( (string)$row['table_name'] );
+            }
+        }
+
+        // how many tables of this schema use each name
+        $useCount = array();
+        foreach ( $schema as $tableName => $table )
+        {
+            if ( $tableName == '_info' || !isset( $table['indexes'] ) || !is_array( $table['indexes'] ) )
+                continue;
+            foreach ( $table['indexes'] as $idxName => $idx )
+            {
+                if ( isset( $idx['type'] ) && $idx['type'] == 'primary' )
+                    continue;
+                $useCount[$idxName] = isset( $useCount[$idxName] ) ? $useCount[$idxName] + 1 : 1;
+            }
+        }
+
+        $names = array();
+        foreach ( $schema as $tableName => $table )
+        {
+            if ( $tableName == '_info' || !isset( $table['indexes'] ) || !is_array( $table['indexes'] ) )
+                continue;
+            foreach ( $table['indexes'] as $idxName => $idx )
+            {
+                if ( isset( $idx['type'] ) && $idx['type'] == 'primary' )
+                    continue;
+                $localName = $idxName;
+                $clash = ( $useCount[$idxName] > 1 ) ||
+                         ( isset( $existing[$idxName] ) && $existing[$idxName] !== $tableName ) ||
+                         ( $idxName !== $tableName && isset( $schema[$idxName] ) );
+                if ( $clash && strpos( $idxName, $tableName . '_' ) !== 0 )
+                {
+                    $localName = $tableName . '_' . $idxName;
+                }
+                if ( strlen( $localName ) > 30 )
+                {
+                    $localName = eZOracleSchema::shorten( $localName, 28 ) . '_i';
+                }
+                $names[$tableName][$idxName] = $localName;
+            }
+        }
+        return $names;
     }
 
     /**
@@ -961,10 +1034,17 @@ BEGIN\n".
         if ( !eZDBSchemaInterface::transformSchema( $schema, $toLocal ) )
             return false;
 
+        // Oracle index names are unique per schema, MySQL ones per table
+        $localIndexNames = $toLocal ? $this->schemaUniqueIndexNames( $schema ) : array();
+
         foreach ( $schema as $tableName => $tableSchema )
         {
             if ( $tableName == '_info' )
                 continue;
+            if ( !isset( $tableSchema['indexes'] ) || !is_array( $tableSchema['indexes'] ) )
+                $tableSchema['indexes'] = array();
+            if ( !isset( $tableSchema['fields'] ) || !is_array( $tableSchema['fields'] ) )
+                $tableSchema['fields'] = array();
 
             if ( !$toLocal )
             {
@@ -973,11 +1053,22 @@ BEGIN\n".
                 foreach ( $tableSchema['indexes'] as $idxName => $idxSchema )
                 {
                     if ( strpos( $idxName, 'sys_' ) === 0 )
+                    {
                         $tmpNewIndexes['PRIMARY'] =& $tableSchema['indexes'][$idxName];
+                        eZDebugSetting::writeDebug( 'lib-dbschema-transformation', '',
+                                                    "renamed index $tableName.$idxName => PRIMARY" );
+                        $idxName = 'PRIMARY';
+                    }
+                    else if ( isset( $idxSchema['_original']['name'] ) )
+                    {
+                        // an index renamed to be unique in the Oracle schema gets its generic name back
+                        $genericIdxName = $idxSchema['_original']['name'];
+                        $tmpNewIndexes[$genericIdxName] =& $tableSchema['indexes'][$idxName];
+                        unset( $tmpNewIndexes[$genericIdxName]['_original']['name'] );
+                        $idxName = $genericIdxName;
+                    }
                     else
                         $tmpNewIndexes[$idxName] =& $tableSchema['indexes'][$idxName];
-                    eZDebugSetting::writeDebug( 'lib-dbschema-transformation', '',
-                                                "renamed index $tableName.$idxName => PRIMARY" );
 
                     // restore the mysql-specific stuff, if it is found
                     if ( isset( $tmpNewIndexes[$idxName]['_original'] ) && isset( $tmpNewIndexes[$idxName]['_original']['fields'] ) )
@@ -1038,15 +1129,20 @@ BEGIN\n".
                 $tmpNewIndexes = array();
                 foreach ( $tableSchema['indexes'] as $idxName => $idxSchema )
                 {
-                    if ( strlen( $idxName ) > 30 )
+                    $newIdxName = isset( $localIndexNames[$tableName][$idxName] ) ? $localIndexNames[$tableName][$idxName] : $idxName;
+                    if ( $newIdxName !== $idxName )
                     {
-                        $newIdxName = eZOracleSchema::shorten( $idxName, 28 ) . '_i';
                         $tmpNewIndexes[$newIdxName] =& $tableSchema['indexes'][$idxName];
+                        $tmpNewIndexes[$newIdxName]['_original']['name'] = $idxName;
                         eZDebugSetting::writeDebug( 'lib-dbschema-transformation', '',
-                                                    "shortened index name $tableName.$idxName to $newIdxName" );
+                                                    "renamed index $tableName.$idxName to $newIdxName" );
                     }
                     else
                         $tmpNewIndexes[$idxName] =& $tableSchema['indexes'][$idxName];
+                    // the rest of the loop works on the entry under its new name
+                    $idxName = $newIdxName;
+                    if ( !isset( $tmpNewIndexes[$idxName]['fields'] ) || !is_array( $tmpNewIndexes[$idxName]['fields'] ) )
+                        continue;
 
                     // remove the mysql-specific stuff, store it for later if we want to go back
                     foreach ( $tmpNewIndexes[$idxName]['fields'] as $field => $desc )
