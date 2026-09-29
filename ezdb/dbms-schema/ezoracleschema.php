@@ -109,6 +109,8 @@ class eZOracleSchema extends eZDBSchemaInterface
                  "         decode (a.nullable, 'N', '1', 'Y', '0') AS not_null, " .
                  "         a.data_type AS col_type, " .
                  "         a.data_length AS col_size, " .
+                 "         a.char_length AS col_char_size, " .
+                 "         a.char_used AS col_char_used, " .
                  "         a.data_default AS default_val, " .
                  "         a.data_precision AS col_precision, " .
                  "         a.data_scale AS col_scale " .
@@ -120,7 +122,11 @@ class eZOracleSchema extends eZDBSchemaInterface
         foreach( $resultArray as $row )
         {
             $colName     = strtolower( $row['col_name'] );
-            $colLength   = $row['col_size'];
+            // data_length is in bytes; a VARCHAR2(255 CHAR) column (the driver sets
+            // NLS_LENGTH_SEMANTICS=CHAR) is 255 characters, but 1020 bytes in AL32UTF8
+            $colLength   = ( isset( $row['col_char_used'] ) && $row['col_char_used'] === 'C' && (int)$row['col_char_size'] > 0 )
+                         ? $row['col_char_size']
+                         : $row['col_size'];
             $colType     = $row['col_type'];
             $colNotNull  = $row['not_null'];
             $colDefault  = $row['default_val'];
