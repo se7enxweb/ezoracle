@@ -1050,6 +1050,12 @@ class eZOracleDB extends eZDBInterface
         if ( $this->isConnected() )
         {
             $sql = "DROP $relationTypeName $relationName";
+            if ( $relationType == eZDBInterface::RELATION_TABLE )
+            {
+                // not into the recycle bin: cleaning a schema (setup's
+                // DatabaseAction=remove) would keep all the space otherwise
+                $sql .= " CASCADE CONSTRAINTS PURGE";
+            }
             return $this->query( $sql );
         }
         return false;
