@@ -1016,11 +1016,15 @@ BEGIN\n".
                         {
                             $schema[$tableName]['fields'][$fieldName]['length'] = $tableSchema['_original']['fields'][$fieldName]['length'];
                         }
+                        if ( isset( $tableSchema['_original']['fields'][$fieldName]['not_null'] ) )
+                        {
+                            $schema[$tableName]['fields'][$fieldName]['not_null'] = $tableSchema['_original']['fields'][$fieldName]['not_null'];
+                        }
                     }
 
                     // always fix default values for CLOB fields: they should be false instead of null
                     // NB: this is a weird convention in eZP standard dba files that we should fix...
-                    if ( $fieldSchema['type'] == 'longtext' && $fieldSchema['default'] === null )
+                    if ( $fieldSchema['type'] == 'longtext' && array_key_exists( 'default', $fieldSchema ) && $fieldSchema['default'] === null )
                     {
                         $schema[$tableName]['fields'][$fieldName]['default'] = false;
                         eZDebugSetting::writeDebug( 'lib-dbschema-transformation', '',
@@ -1073,18 +1077,35 @@ BEGIN\n".
 
                 foreach ( $tableSchema['fields'] as $fieldName => $fieldSchema )
                 {
-                    if ( ( $fieldSchema['type'] == 'longtext' && $fieldSchema['default'] === false ) ||
-                         ( ( $fieldSchema['type'] == 'varchar' || $fieldSchema['type'] == 'char' ) && ( $fieldSchema['default'] === '' || $fieldSchema['default'] === false ) ) )
+                    $fieldDefault = array_key_exists( 'default', $fieldSchema ) ? $fieldSchema['default'] : null;
+                    if ( ( $fieldSchema['type'] == 'longtext' && $fieldDefault === false ) ||
+                         ( ( $fieldSchema['type'] == 'varchar' || $fieldSchema['type'] == 'char' ) && ( $fieldDefault === '' || $fieldDefault === false ) ) )
                     {
-                        $schema[$tableName]['_original']['fields'][$fieldName]['default'] = $schema[$tableName]['fields'][$fieldName]['default'];
+                        $schema[$tableName]['_original']['fields'][$fieldName]['default'] = $fieldDefault;
                         $schema[$tableName]['fields'][$fieldName]['default'] = null;
                         eZDebugSetting::writeDebug( 'lib-dbschema-transformation', '',
                                                     "changed default value for $tableName.$fieldName from null to false" );
 
                     }
 
+                    // Oracle stores '' as NULL, so a NOT NULL text column refuses the
+                    // empty string that MySQL, PostgreSQL and SQLite store (ORA-01400),
+                    // whether its default is '' or it has none: eZPersistentObject and
+                    // the installers write '' into such columns all the time. Every text
+                    // column is therefore nullable on Oracle; the reverse transformation
+                    // restores the original option. (This covers the columns
+                    // ColumnOptionTranslations lists one by one, and all the others.)
+                    if ( in_array( $fieldSchema['type'], array( 'varchar', 'char', 'longtext', 'mediumtext', 'text', 'tinytext' ) ) &&
+                         !empty( $schema[$tableName]['fields'][$fieldName]['not_null'] ) )
+                    {
+                        $schema[$tableName]['_original']['fields'][$fieldName]['not_null'] = $schema[$tableName]['fields'][$fieldName]['not_null'];
+                        unset( $schema[$tableName]['fields'][$fieldName]['not_null'] );
+                        eZDebugSetting::writeDebug( 'lib-dbschema-transformation', '',
+                                                    "made text column $tableName.$fieldName nullable ('' is NULL in Oracle)" );
+                    }
+
                     // fix bigints: oracle looses info about them not being integers
-                    if ( $fieldSchema['type'] == 'bigint' && $fieldSchema['length'] == 20 )
+                    if ( $fieldSchema['type'] == 'bigint' && isset( $fieldSchema['length'] ) && $fieldSchema['length'] == 20 )
                     {
                         $schema[$tableName]['_original']['fields'][$fieldName]['type'] = 'bigint';
                         $schema[$tableName]['_original']['fields'][$fieldName]['length'] = 20;
