@@ -68,14 +68,31 @@ class eZOracleDB extends eZDBInterface
             return;
         }
 
-        //$server = $this->Server;
-        $user = $this->User;
-        $password = $this->Password;
-        $db = $this->DB;
-
         $this->ErrorMessage = false;
         $this->ErrorNumber = false;
+        $this->Mode = OCI_COMMIT_ON_SUCCESS;
 
+        $this->loadSettings();
+
+        if ( !$this->connect() )
+        {
+            $this->IsConnected = false;
+            throw new eZDBNoConnectionException( $this->connectString(), $this->ErrorMessage, $this->ErrorNumber );
+        }
+
+        eZDebug::createAccumulatorGroup( 'oracle_total', 'Oracle Total' );
+    }
+
+    /**
+     * Reads the settings of the driver: site.ini [DatabaseSettings] (connection,
+     * UsePersistentConnection, OracleEmptyStringForNull, OracleCaseInsensitive*)
+     * and extension/ezoracle/settings/ezoracle.ini (connection resilience,
+     * performance, tracing, logging; see INSTALL). Missing settings keep the
+     * defaults of the properties, so the driver also works when ezoracle.ini is
+     * not found (the extension not active, only its driver class used).
+     */
+    function loadSettings()
+    {
         $ini = eZINI::instance();
 
         if ( $ini->hasVariable( 'DatabaseSettings', 'OracleEmptyStringForNull' ) )
@@ -99,121 +116,452 @@ class eZOracleDB extends eZDBInterface
                 eZDebug::writeWarning( "OracleCaseInsensitiveSort '$sort' is not a sort name, using BINARY_CI", __METHOD__ );
             }
         }
+        $this->Persistent = $ini->hasVariable( 'DatabaseSettings', 'UsePersistentConnection' ) &&
+                            $ini->variable( 'DatabaseSettings', 'UsePersistentConnection' ) == 'enabled';
+        $this->RetryCount = (int)$this->connectRetryCount();
+        $this->RetryDelay = (float)$this->connectRetryWaitTime();
 
-        if ( function_exists( "oci_connect" ) )
+        $oraIni = eZINI::instance( 'ezoracle.ini' );
+        $get = function ( $section, $name, $default ) use ( $oraIni )
         {
-            $this->Mode = OCI_COMMIT_ON_SUCCESS;
+            return $oraIni->hasVariable( $section, $name ) ? $oraIni->variable( $section, $name ) : $default;
+        };
+        $enabled = function ( $value ) { return $value === 'enabled' || $value === 'true' || $value === '1'; };
 
-            // translate chosen charset to its Oracle analogue; without one oci8
-            // would take NLS_LANG from the environment, which is US7ASCII when it
-            // is not set (every non-ASCII character becomes '?'), so the client
-            // then talks UTF-8, the internal charset of Exponential
-            $oraCharset = $this->oracleCharset( $this->Charset );
-            if ( $oraCharset === null )
+        // [ConnectionSettings]
+        $persistent = $get( 'ConnectionSettings', 'Persistent', 'inherit' );
+        if ( $persistent !== 'inherit' )
+            $this->Persistent = $enabled( $persistent );
+        $this->DRCP = $enabled( $get( 'ConnectionSettings', 'DRCP', 'disabled' ) );
+        $this->ConnectionClass = trim( (string)$get( 'ConnectionSettings', 'ConnectionClass', '' ) );
+        $this->TnsAdmin = trim( (string)$get( 'ConnectionSettings', 'TnsAdmin', '' ) );
+        $this->ConnectStringSetting = trim( (string)$get( 'ConnectionSettings', 'ConnectString', '' ) );
+        $this->Hosts = array_values( array_filter( array_map( 'trim', (array)$get( 'ConnectionSettings', 'Hosts', array() ) ), 'strlen' ) );
+        $this->ServiceName = trim( (string)$get( 'ConnectionSettings', 'ServiceName', '' ) );
+        $this->Failover = $enabled( $get( 'ConnectionSettings', 'Failover', 'enabled' ) );
+        $this->LoadBalance = $enabled( $get( 'ConnectionSettings', 'LoadBalance', 'disabled' ) );
+        $this->ConnectTimeout = (int)$get( 'ConnectionSettings', 'ConnectTimeout', 0 );
+        $this->Edition = trim( (string)$get( 'ConnectionSettings', 'Edition', '' ) );
+        if ( $oraIni->hasVariable( 'ConnectionSettings', 'RetryCount' ) )
+            $this->RetryCount = max( 0, (int)$get( 'ConnectionSettings', 'RetryCount', 0 ) );
+        if ( $oraIni->hasVariable( 'ConnectionSettings', 'RetryDelay' ) )
+            $this->RetryDelay = max( 0, (float)$get( 'ConnectionSettings', 'RetryDelay', 1 ) );
+        $this->RetryBackoff = max( 1, (float)$get( 'ConnectionSettings', 'RetryBackoff', 2 ) );
+        $errors = (array)$get( 'ConnectionSettings', 'ReconnectErrors', array() );
+        if ( count( $errors ) > 0 )
+            $this->ReconnectErrors = array_map( 'intval', $errors );
+        $this->RetryReads = $enabled( $get( 'ConnectionSettings', 'RetryReads', 'enabled' ) );
+        $this->CallTimeout = max( 0, (int)$get( 'ConnectionSettings', 'CallTimeout', 0 ) );
+        $this->KeepAliveInterval = max( 0, (int)$get( 'ConnectionSettings', 'KeepAliveInterval', 0 ) );
+
+        // [PerformanceSettings]
+        $this->Prefetch = max( 0, (int)$get( 'PerformanceSettings', 'Prefetch', 0 ) );
+        $this->LobPrefetch = max( 0, (int)$get( 'PerformanceSettings', 'LobPrefetch', 0 ) );
+
+        // [TraceSettings]
+        $this->TraceClientIdentifier = (string)$get( 'TraceSettings', 'ClientIdentifier', '' );
+        $this->TraceModule = (string)$get( 'TraceSettings', 'ModuleName', '' );
+        $this->TraceAction = (string)$get( 'TraceSettings', 'Action', '' );
+        $this->TraceClientInfo = (string)$get( 'TraceSettings', 'ClientInfo', '' );
+
+        // [LogSettings]
+        $this->SlowQueryThreshold = max( 0, (float)$get( 'LogSettings', 'SlowQueryThreshold', 0 ) );
+        $this->SlowQueryLog = basename( (string)$get( 'LogSettings', 'SlowQueryLog', 'oracle-slow.log' ) );
+        $this->MaskLiterals = $enabled( $get( 'LogSettings', 'MaskLiterals', 'enabled' ) );
+        $this->StatementCounts = $enabled( $get( 'LogSettings', 'StatementCounts', 'disabled' ) );
+    }
+
+    /**
+     * The connect string the driver uses: ezoracle.ini [ConnectionSettings]
+     * ConnectString, or a descriptor built from Hosts[] and ServiceName (with
+     * failover, load balancing, connect timeout and, for DRCP, SERVER=POOLED),
+     * or site.ini [DatabaseSettings] Database (Easy Connect host:port/service,
+     * a TNS alias, or a full descriptor). With DRCP an Easy Connect string gets
+     * ':POOLED' appended; a TNS alias must carry (SERVER=POOLED) in tnsnames.ora.
+     *
+     * @return string
+     */
+    function connectString()
+    {
+        if ( $this->ConnectStringSetting !== '' )
+        {
+            $cs = $this->ConnectStringSetting;
+        }
+        else if ( count( $this->Hosts ) > 0 && $this->ServiceName !== '' )
+        {
+            $addresses = '';
+            foreach ( $this->Hosts as $host )
             {
-                if ( $this->Charset !== null && $this->Charset !== '' && $this->Charset !== false )
-                {
-                    eZDebug::writeWarning( "Charset '{$this->Charset}' has no Oracle equivalent, using AL32UTF8", __METHOD__ );
-                }
-                $oraCharset = 'AL32UTF8';
+                $parts = explode( ':', $host, 2 );
+                $addresses .= '(ADDRESS=(PROTOCOL=TCP)(HOST=' . $parts[0] . ')(PORT=' . ( isset( $parts[1] ) ? (int)$parts[1] : 1521 ) . '))';
             }
-
-            $maxAttempts = $this->connectRetryCount();
-            $waitTime = $this->connectRetryWaitTime();
-            $numAttempts = 1;
-            if ( $ini->variable( "DatabaseSettings", "UsePersistentConnection" ) == "enabled" )
-            {
-                eZDebugSetting::writeDebug( 'kernel-db-oracle', $ini->variable( "DatabaseSettings", "UsePersistentConnection" ), "using persistent connection" );
-                eZDebug::accumulatorStart( 'oracle_connection', 'oracle_total', 'Database connection' );
-                $oldHandling = eZDebug::setHandleType( eZDebug::HANDLE_EXCEPTION );
-                try {
-                    $this->DBConnection = oci_pconnect( $user, $password, $db, $oraCharset );
-                } catch( ErrorException $e ) {}
-                eZDebug::accumulatorStop( 'oracle_connection' );
-                eZDebug::setHandleType( $oldHandling );
-                while ( $this->DBConnection == false and $numAttempts <= $maxAttempts )
-                {
-                    sleep( $waitTime );
-                    eZDebug::accumulatorStart( 'oracle_connection', 'oracle_total', 'Database connection' );
-                    $oldHandling = eZDebug::setHandleType( eZDebug::HANDLE_EXCEPTION );
-                    try {
-                        $this->DBConnection = oci_pconnect( $user, $password, $db, $oraCharset );
-                    } catch( ErrorException $e ) {}
-                    eZDebug::accumulatorStop( 'oracle_connection' );
-                    eZDebug::setHandleType( $oldHandling );
-                    $numAttempts++;
-                }
-            }
-            else
-            {
-                eZDebugSetting::writeDebug( 'kernel-db-oracle', "using real connection",  "using real connection" );
-                $oldHandling = eZDebug::setHandleType( eZDebug::HANDLE_EXCEPTION );
-                eZDebug::accumulatorStart( 'oracle_connection', 'oracle_total', 'Database connection' );
-                try {
-                    $this->DBConnection = oci_connect( $user, $password, $db, $oraCharset );
-                } catch( ErrorException $e ) {}
-                eZDebug::accumulatorStop( 'oracle_connection' );
-                eZDebug::setHandleType( $oldHandling );
-                while ( $this->DBConnection == false and $numAttempts <= $maxAttempts )
-                {
-                    sleep( $waitTime );
-                    $oldHandling = eZDebug::setHandleType( eZDebug::HANDLE_EXCEPTION );
-                    eZDebug::accumulatorStart( 'oracle_connection', 'oracle_total', 'Database connection' );
-                    try {
-                        $this->DBConnection = @oci_connect( $user, $password, $db, $oraCharset );
-                    } catch( ErrorException $e ) {}
-                    eZDebug::accumulatorStop( 'oracle_connection' );
-                    eZDebug::setHandleType( $oldHandling );
-                    $numAttempts++;
-                }
-            }
-
-//            OCIInternalDebug(1);
-
-            if ( $this->DBConnection === false )
-            {
-                $this->IsConnected = false;
-            }
-            else
-            {
-                $this->IsConnected = true;
-                $this->initializeSession();
-            }
-
-            if ( $this->DBConnection === false )
-            {
-                $error = oci_error();
-
-                // oci_error() gives false when the client could not even be
-                // initialised (no client libraries, bad NLS settings, ...)
-                if ( !is_array( $error ) )
-                {
-                    $error = array( 'code' => -1, 'message' => 'oci_connect() failed without an Oracle error (are the Oracle client libraries installed and found?)' );
-                }
-
-                if ( $error['code'] != 0 )
-                {
-                    if ( $error['code'] == 12541 )
-                    {
-                        $error['message'] = 'No listener (probably the server is down).';
-                    }
-                    $this->ErrorMessage = $error['message'];
-                    $this->ErrorNumber = $error['code'];
-                    eZDebug::writeError( "Connection error(" . $error["code"] . "):\n". $error["message"] .  " ", "eZOracleDB" );
-                }
-
-                throw new eZDBNoConnectionException( $db, $this->ErrorMessage, $this->ErrorNumber );
-            }
+            $cs = '(DESCRIPTION=' .
+                  ( $this->ConnectTimeout > 0 ? '(CONNECT_TIMEOUT=' . $this->ConnectTimeout . ')(TRANSPORT_CONNECT_TIMEOUT=' . $this->ConnectTimeout . ')' : '' ) .
+                  '(ADDRESS_LIST=(FAILOVER=' . ( $this->Failover ? 'on' : 'off' ) . ')(LOAD_BALANCE=' . ( $this->LoadBalance ? 'on' : 'off' ) . ')' . $addresses . ')' .
+                  '(CONNECT_DATA=(SERVICE_NAME=' . $this->ServiceName . ')' . ( $this->DRCP ? '(SERVER=POOLED)' : '' ) . '))';
+            return $cs;
         }
         else
         {
-            $this->ErrorMessage = "Oracle support not compiled in PHP";
-            $this->ErrorNumber = -1;
-            eZDebug::writeError( $this->ErrorMessage, "eZOracleDB" );
-            $this->IsConnected = false;
+            $cs = (string)$this->DB;
+        }
+        // DRCP on an Easy Connect string: host:port/service:POOLED
+        if ( $this->DRCP && strpos( $cs, '(' ) === false && strpos( $cs, '/' ) !== false && stripos( $cs, ':pooled' ) === false )
+        {
+            $cs .= ':POOLED';
+        }
+        return $cs;
+    }
+
+    /**
+     * Opens the connection, with the retries and back-off of ezoracle.ini
+     * [ConnectionSettings] (or site.ini ConnectRetries), then sets the call
+     * timeout and the session settings.
+     *
+     * @param bool $fresh a new connection even where oci_connect() would hand
+     *                    back the cached one of this request (used to reconnect)
+     * @return bool
+     */
+    function connect( $fresh = false )
+    {
+        if ( $this->TnsAdmin !== '' )
+        {
+            putenv( 'TNS_ADMIN=' . $this->TnsAdmin );
+        }
+        if ( $this->ConnectionClass !== '' )
+        {
+            ini_set( 'oci8.connection_class', $this->ConnectionClass );
+        }
+        if ( $this->Edition !== '' && function_exists( 'oci_set_edition' ) )
+        {
+            oci_set_edition( $this->Edition );
         }
 
-        eZDebug::createAccumulatorGroup( 'oracle_total', 'Oracle Total' );
+        // translate chosen charset to its Oracle analogue; without one oci8
+        // would take NLS_LANG from the environment, which is US7ASCII when it
+        // is not set (every non-ASCII character becomes '?'), so the client
+        // then talks UTF-8, the internal charset of Exponential
+        $oraCharset = $this->oracleCharset( $this->Charset );
+        if ( $oraCharset === null )
+        {
+            if ( $this->Charset !== null && $this->Charset !== '' && $this->Charset !== false )
+            {
+                eZDebug::writeWarning( "Charset '{$this->Charset}' has no Oracle equivalent, using AL32UTF8", __METHOD__ );
+            }
+            $oraCharset = 'AL32UTF8';
+        }
+
+        $user = $this->User;
+        $password = $this->Password;
+        $connectString = $this->connectString();
+        $function = $this->Persistent ? 'oci_pconnect' : ( $fresh ? 'oci_new_connect' : 'oci_connect' );
+
+        $this->DBConnection = false;
+        $delay = $this->RetryDelay;
+        $error = false;
+        for ( $attempt = 0; $attempt <= $this->RetryCount; ++$attempt )
+        {
+            if ( $attempt > 0 )
+            {
+                eZDebug::writeWarning( "Connection attempt $attempt of {$this->RetryCount} failed" . ( is_array( $error ) ? ' (ORA-' . $error['code'] . ')' : '' ) . ", next in {$delay}s", __METHOD__ );
+                usleep( (int)( $delay * 1000000 ) );
+                $delay *= $this->RetryBackoff;
+            }
+            eZDebug::accumulatorStart( 'oracle_connection', 'oracle_total', 'Database connection' );
+            $oldHandling = eZDebug::setHandleType( eZDebug::HANDLE_EXCEPTION );
+            try
+            {
+                $connection = @$function( $user, $password, $connectString, $oraCharset );
+            }
+            catch ( ErrorException $e )
+            {
+                $connection = false;
+            }
+            eZDebug::setHandleType( $oldHandling );
+            eZDebug::accumulatorStop( 'oracle_connection' );
+            if ( $connection )
+            {
+                $this->DBConnection = $connection;
+                break;
+            }
+            $error = oci_error();
+        }
+
+        if ( !$this->DBConnection )
+        {
+            $this->IsConnected = false;
+            // oci_error() gives false when the client could not even be
+            // initialised (no client libraries, bad NLS settings, ...)
+            if ( !is_array( $error ) )
+            {
+                $error = array( 'code' => -1, 'message' => 'oci_connect() failed without an Oracle error (are the Oracle client libraries installed and found?)' );
+            }
+            if ( $error['code'] == 12541 )
+            {
+                $error['message'] = 'No listener (probably the server is down).';
+            }
+            $this->ErrorMessage = $error['message'];
+            $this->ErrorNumber = $error['code'];
+            eZDebug::writeError( "Connection error(" . $error["code"] . "):\n". $error["message"] .  " ", "eZOracleDB" );
+            return false;
+        }
+
+        $this->IsConnected = true;
+        if ( $this->CallTimeout > 0 && function_exists( 'oci_set_call_timeout' ) )
+        {
+            oci_set_call_timeout( $this->DBConnection, $this->CallTimeout );
+        }
+        // the tags are sent again on the new session
+        $this->TraceTags = array();
+        $this->LastActivity = microtime( true );
+        $this->initializeSession();
+        return true;
+    }
+
+    /**
+     * Drops a broken connection and opens a new one. Not inside a transaction:
+     * its work is lost with the session, and the caller has to know.
+     *
+     * @return bool
+     */
+    function reconnect()
+    {
+        if ( $this->TransactionCounter > 0 )
+        {
+            return false;
+        }
+        if ( $this->DBConnection )
+        {
+            @oci_close( $this->DBConnection );
+        }
+        $this->DBConnection = false;
+        $this->IsConnected = false;
+        ++$this->ReconnectCount;
+        $ok = $this->connect( true );
+        eZDebug::writeNotice( 'Reconnected to Oracle after a lost connection: ' . ( $ok ? 'ok' : 'failed' ), __METHOD__ );
+        return $ok;
+    }
+
+    /**
+     * True for the Oracle errors that mean the connection is gone (or the
+     * service is not reachable) rather than the statement is wrong
+     * (ezoracle.ini [ConnectionSettings] ReconnectErrors[]).
+     *
+     * @param int $code
+     * @return bool
+     */
+    function isReconnectError( $code )
+    {
+        return in_array( (int)$code, $this->ReconnectErrors, true );
+    }
+
+    /**
+     * Keep-alive for long running processes (CLI scripts, Velocity workers):
+     * when the connection was idle for longer than ezoracle.ini
+     * [ConnectionSettings] KeepAliveInterval seconds, a round trip checks it
+     * and a dead one is replaced, before the next statement fails on it.
+     */
+    function keepAlive()
+    {
+        if ( $this->KeepAliveInterval <= 0 || $this->TransactionCounter > 0 || !$this->DBConnection )
+        {
+            return;
+        }
+        if ( microtime( true ) - $this->LastActivity < $this->KeepAliveInterval )
+        {
+            return;
+        }
+        $statement = @oci_parse( $this->DBConnection, 'BEGIN NULL; END;' );
+        $alive = $statement && @oci_execute( $statement, OCI_COMMIT_ON_SUCCESS );
+        if ( $statement )
+        {
+            @oci_free_statement( $statement );
+        }
+        if ( $alive )
+        {
+            $this->LastActivity = microtime( true );
+        }
+        else
+        {
+            eZDebug::writeWarning( 'The connection was idle for ' . round( microtime( true ) - $this->LastActivity ) . 's and did not answer: reconnecting', __METHOD__ );
+            $this->reconnect();
+        }
+    }
+
+    /**
+     * Sets the client identifier, module, action and client info of the session
+     * from ezoracle.ini [TraceSettings] (patterns with %siteaccess%, %module%,
+     * %view%, %user_id%, %script%, %pid%), so a DBA sees in V$SESSION which part
+     * of Exponential a session works for. The values travel with the next
+     * round trip, and are only set again when they change.
+     */
+    function applyTraceTags()
+    {
+        if ( $this->TraceClientIdentifier === '' && $this->TraceModule === '' && $this->TraceAction === '' && $this->TraceClientInfo === '' )
+        {
+            return;
+        }
+        $siteaccess = isset( $GLOBALS['eZCurrentAccess']['name'] ) ? $GLOBALS['eZCurrentAccess']['name'] : 'none';
+        $module = $view = '';
+        if ( isset( $GLOBALS['eZURIRequestInstance'] ) && is_object( $GLOBALS['eZURIRequestInstance'] ) )
+        {
+            $module = (string)$GLOBALS['eZURIRequestInstance']->element( 0 );
+            $view = (string)$GLOBALS['eZURIRequestInstance']->element( 1 );
+        }
+        $script = PHP_SAPI === 'cli' && isset( $_SERVER['argv'][0] ) ? basename( $_SERVER['argv'][0] ) : PHP_SAPI;
+        if ( $module === '' )
+        {
+            $module = $script;
+        }
+        $userID = isset( $_SESSION['eZUserLoggedInID'] ) ? (int)$_SESSION['eZUserLoggedInID'] : 0;
+        $replace = array( '%siteaccess%' => $siteaccess, '%module%' => $module, '%view%' => $view,
+                          '%user_id%' => $userID, '%script%' => $script, '%pid%' => getmypid() );
+        // the lengths V$SESSION keeps: client identifier 64, module 48, action 32, client info 64
+        $tags = array( 'client_identifier' => substr( strtr( $this->TraceClientIdentifier, $replace ), 0, 64 ),
+                       'module'            => substr( strtr( $this->TraceModule, $replace ), 0, 48 ),
+                       'action'            => substr( strtr( $this->TraceAction, $replace ), 0, 32 ),
+                       'client_info'       => substr( strtr( $this->TraceClientInfo, $replace ), 0, 64 ) );
+        foreach ( $tags as $tag => $value )
+        {
+            if ( $value === '' || ( isset( $this->TraceTags[$tag] ) && $this->TraceTags[$tag] === $value ) )
+            {
+                continue;
+            }
+            switch ( $tag )
+            {
+                case 'client_identifier': @oci_set_client_identifier( $this->DBConnection, $value ); break;
+                case 'module':            @oci_set_module_name( $this->DBConnection, $value ); break;
+                case 'action':            @oci_set_action( $this->DBConnection, $value ); break;
+                case 'client_info':       @oci_set_client_info( $this->DBConnection, $value ); break;
+            }
+            $this->TraceTags[$tag] = $value;
+        }
+    }
+
+    /**
+     * Parses and runs $sql with the bind variables collected by bindVariable():
+     * keep-alive, trace tags, prefetch, statement counts, the slow query log, and
+     * a reconnect when the connection is lost (ReconnectErrors). A read (SELECT,
+     * WITH) that met a lost connection outside a transaction is run again on the
+     * new connection (RetryReads=enabled, the default); a write is not, as it may
+     * have been carried out before the connection broke: it is reported.
+     *
+     * @param string $sql
+     * @param string $caller 'query()' or 'arrayQuery()', for the error report
+     * @param bool $useBinds bind the variables of bindVariable() (query() does)
+     * @return resource|bool the executed statement, false on an error (reported)
+     */
+    function executeStatement( $sql, $caller, $useBinds = true )
+    {
+        $this->keepAlive();
+        if ( !$this->DBConnection )
+        {
+            $this->ErrorMessage = 'Not connected';
+            $this->ErrorNumber = -1;
+            return false;
+        }
+        $this->applyTraceTags();
+        $isRead = (bool)preg_match( '/^[\s(]*(SELECT|WITH)\b/i', $sql );
+        $type = strtoupper( (string)strtok( ltrim( $sql, " \t\r\n(" ), " \t\r\n(" ) );
+
+        for ( $attempt = 0; ; ++$attempt )
+        {
+            $statement = @oci_parse( $this->DBConnection, $sql );
+            if ( !$statement )
+            {
+                $this->setError( $this->DBConnection, $caller, $sql );
+                return false;
+            }
+            foreach ( $useBinds ? $this->BindVariableArray : array() as $key => $bindVar )
+            {
+                oci_bind_by_name( $statement, $bindVar['dbname'], $this->BindVariableArray[$key]['value'], -1 );
+            }
+            if ( $isRead && $this->Prefetch > 0 )
+            {
+                oci_set_prefetch( $statement, $this->Prefetch );
+            }
+            if ( $isRead && $this->LobPrefetch > 0 && function_exists( 'oci_set_prefetch_lob' ) )
+            {
+                @oci_set_prefetch_lob( $statement, $this->LobPrefetch );
+            }
+
+            if ( $this->StatementCounts )
+            {
+                eZDebug::accumulatorStart( 'oracle_stmt_' . $type, 'oracle_total', "Oracle $type statements" );
+            }
+            $start = microtime( true );
+            $exec = @oci_execute( $statement, $this->Mode );
+            $elapsed = ( microtime( true ) - $start ) * 1000;
+            if ( $this->StatementCounts )
+            {
+                eZDebug::accumulatorStop( 'oracle_stmt_' . $type );
+            }
+            ++$this->StatementCount;
+            $this->LastActivity = microtime( true );
+
+            if ( $exec )
+            {
+                if ( $this->SlowQueryThreshold > 0 && $elapsed >= $this->SlowQueryThreshold )
+                {
+                    $this->logSlowQuery( $sql, $elapsed );
+                }
+                return $statement;
+            }
+
+            $error = oci_error( $statement );
+            if ( is_array( $error ) && $this->isReconnectError( $error['code'] ) && $this->TransactionCounter == 0 && $attempt < max( 1, $this->RetryCount ) )
+            {
+                @oci_free_statement( $statement );
+                if ( $this->reconnect() && $isRead && $this->RetryReads )
+                {
+                    continue;
+                }
+                // a write may have been carried out before the connection broke:
+                // it is reported, not run a second time
+                $statement = false;
+                $this->ErrorMessage = $error['message'];
+                $this->ErrorNumber = $error['code'];
+                eZDebug::writeError( "Error (" . $error['code'] . "): " . $error['message'] . "\nThe connection was lost; the statement was not run again:\n" . $sql, "eZOracleDB::$caller" );
+                return false;
+            }
+            $hasError = $this->setError( $statement, $caller, $sql );
+            if ( !$hasError )
+            {
+                // oci_execute() failed without an Oracle error: nothing to report
+                return $statement;
+            }
+            @oci_free_statement( $statement );
+            return false;
+        }
+    }
+
+    /**
+     * Writes a statement that took $elapsed milliseconds or more (ezoracle.ini
+     * [LogSettings] SlowQueryThreshold) to var/log/<SlowQueryLog>, with the bound
+     * values replaced by their length and, with MaskLiterals, the string literals
+     * of the SQL by '?', so no personal data or password lands in the log.
+     *
+     * @param string $sql
+     * @param float $elapsed milliseconds
+     */
+    function logSlowQuery( $sql, $elapsed )
+    {
+        $text = preg_replace( '/\s+/', ' ', trim( $sql ) );
+        if ( $this->MaskLiterals )
+        {
+            $text = preg_replace( "/'(?:[^']|'')*'/", "'?'", $text );
+        }
+        if ( strlen( $text ) > 4000 )
+        {
+            $text = substr( $text, 0, 4000 ) . ' ...';
+        }
+        $binds = array();
+        foreach ( $this->BindVariableArray as $bindVar )
+        {
+            $binds[] = $bindVar['dbname'] . '=<' . strlen( (string)$bindVar['value'] ) . ' bytes>';
+        }
+        $who = isset( $this->TraceTags['module'] ) ? ' [' . $this->TraceTags['module'] . ( isset( $this->TraceTags['action'] ) ? ' ' . $this->TraceTags['action'] : '' ) . ']' : '';
+        eZLog::write( sprintf( '%.1f ms%s %s%s', $elapsed, $who, $text, $binds ? ' binds ' . implode( ', ', $binds ) : '' ), $this->SlowQueryLog );
     }
 
     /**
@@ -399,50 +747,16 @@ class eZOracleDB extends eZDBInterface
 
         $analysisText = $this->analyseQuery( $sql, $server );
 
-        $statement = oci_parse( $this->DBConnection, $sql );
-
+        // $this->Mode commits every statement outside a transaction; the parent
+        // class counts nested transactions (see beginQuery())
+        $statement = $this->executeStatement( $sql, 'query()' );
         if ( $statement )
         {
-            foreach ( $this->BindVariableArray as $bindVar )
-            {
-                oci_bind_by_name( $statement, $bindVar['dbname'], $bindVar['value'], -1 );
-            }
-
-            // was: we do not use $this->Mode here because we might have nested transactions
-            // change was introduced in 2.0: we leave to parent class the handling
-            // of nested transactions, and always use $this->Mode to commit
-            // if needed
-            $exec = @oci_execute( $statement, $this->Mode );
-            if ( !$exec )
-            {
-                if ( $this->setError( $statement, 'query()', $sql ) )
-                {
-                    $result = false;
-                }
-            }
-            /*else
-            {
-                // small api change: we do not commit if exec fails and oci_error says no error.
-                // previously we did commit anyway...
-
-                // Commit when we are not in a transaction and we use an 'autocommit' mode.
-                // This is done because we execute queries in non-autocomiit mode, while
-                // by default the db driver works in autocommit
-                if ( $this->Mode != OCI_DEFAULT && $this->TransactionCounter == 0)
-                {
-                    oci_commit( $this->DBConnection );
-                }
-            }*/
-
             oci_free_statement( $statement );
-
         }
         else
         {
-            if ( $this->setError( $this->DBConnection, 'query()', $sql ) )
-            {
-                $result = false;
-            }
+            $result = false;
         }
 
         if ( $this->OutputSQL )
@@ -545,29 +859,16 @@ class eZOracleDB extends eZDBInterface
         }
         $this->ErrorMessage = false;
         $this->ErrorNumber = false;
-        $statement = oci_parse( $this->DBConnection, $sql );
+        // bind variables are query()'s: a pending one is left for it
+        $statement = $this->executeStatement( $sql, 'arrayQuery()', false );
         if ( !$statement )
         {
             eZDebug::accumulatorStop( 'oracle_query' );
-            $this->setError( $this->DBConnection, 'arrayQuery()', $sql );
             if ( $this->errorHandling == eZDB::ERROR_HANDLING_EXCEPTIONS )
             {
                 throw new eZDBException( $this->ErrorMessage, $this->ErrorNumber );
             }
             return false;
-        }
-        if ( !@oci_execute( $statement, $this->Mode ) )
-        {
-            if ( $this->setError( $statement, 'arrayQuery()', $sql ) )
-            {
-                oci_free_statement( $statement );
-                eZDebug::accumulatorStop( 'oracle_query' );
-                if ( $this->errorHandling == eZDB::ERROR_HANDLING_EXCEPTIONS )
-                {
-                    throw new eZDBException( $this->ErrorMessage, $this->ErrorNumber );
-                }
-                return false;
-            }
         }
         eZDebug::accumulatorStop( 'oracle_query' );
 
@@ -1656,6 +1957,45 @@ class eZOracleDB extends eZDBInterface
     public $CaseInsensitive = false;
     /// the NLS_SORT used then (site.ini [DatabaseSettings] OracleCaseInsensitiveSort)
     public $CaseInsensitiveSort = 'BINARY_CI';
+
+    /// ezoracle.ini [ConnectionSettings], see loadSettings() and INSTALL
+    public $Persistent = false;
+    public $DRCP = false;
+    public $ConnectionClass = '';
+    public $TnsAdmin = '';
+    public $ConnectStringSetting = '';
+    public $Hosts = array();
+    public $ServiceName = '';
+    public $Failover = true;
+    public $LoadBalance = false;
+    public $ConnectTimeout = 0;
+    public $Edition = '';
+    public $RetryCount = 0;
+    public $RetryDelay = 1.0;
+    public $RetryBackoff = 2.0;
+    /// ORA- numbers that mean a lost or unreachable connection
+    public $ReconnectErrors = array( 28, 1012, 1033, 1034, 1089, 3113, 3114, 3135, 12153, 12170, 12514, 12528, 12537, 12541, 12543, 12545, 12547, 12570, 25408 );
+    public $RetryReads = true;
+    public $CallTimeout = 0;
+    public $KeepAliveInterval = 0;
+    /// ezoracle.ini [PerformanceSettings]
+    public $Prefetch = 0;
+    public $LobPrefetch = 0;
+    /// ezoracle.ini [TraceSettings] and what was sent last
+    public $TraceClientIdentifier = '';
+    public $TraceModule = '';
+    public $TraceAction = '';
+    public $TraceClientInfo = '';
+    public $TraceTags = array();
+    /// ezoracle.ini [LogSettings]
+    public $SlowQueryThreshold = 0;
+    public $SlowQueryLog = 'oracle-slow.log';
+    public $MaskLiterals = true;
+    public $StatementCounts = false;
+    /// counters of this connection object
+    public $StatementCount = 0;
+    public $ReconnectCount = 0;
+    public $LastActivity = 0.0;
 
     // @todo move this to a static var, and we should shave off a little ram...
     var $CharsetsMap = array(
