@@ -157,6 +157,11 @@ class eZOracleDB extends eZDBInterface
         // [PerformanceSettings]
         $this->Prefetch = max( 0, (int)$get( 'PerformanceSettings', 'Prefetch', 0 ) );
         $this->LobPrefetch = max( 0, (int)$get( 'PerformanceSettings', 'LobPrefetch', 0 ) );
+        // CURSOR_SHARING of the session: FORCE lets Oracle treat the literals of the kernel's SQL as bind variables,
+        // so a statement that differs only in its values is parsed once instead of hard-parsed every time. EXACT is
+        // Oracle's default. Only these two values are accepted.
+        $cursorSharing = strtoupper( trim( (string)$get( 'PerformanceSettings', 'CursorSharing', 'EXACT' ) ) );
+        $this->CursorSharing = in_array( $cursorSharing, array( 'EXACT', 'FORCE' ), true ) ? $cursorSharing : 'EXACT';
 
         // [TraceSettings]
         $this->TraceClientIdentifier = (string)$get( 'TraceSettings', 'ClientIdentifier', '' );
@@ -602,13 +607,14 @@ class eZOracleDB extends eZDBInterface
      *   creates count characters as the lengths in the .dba files do
      *   (VARCHAR2(255) would hold ~85 CJK characters otherwise);
      * - with site.ini [DatabaseSettings] OracleCaseInsensitive=enabled, linguistic
-     *   comparison and sorting (NLS_COMP=LINGUISTIC, NLS_SORT=OracleCaseInsensitiveSort).
+     *   comparison and sorting (NLS_COMP=LINGUISTIC, NLS_SORT=OracleCaseInsensitiveSort);
+     * - CURSOR_SHARING from ezoracle.ini [PerformanceSettings] CursorSharing (EXACT or FORCE).
      *
      * @return bool
      */
     function initializeSession()
     {
-        $settings = array( "NLS_NUMERIC_CHARACTERS='. '", 'NLS_LENGTH_SEMANTICS=CHAR' );
+        $settings = array( "NLS_NUMERIC_CHARACTERS='. '", 'NLS_LENGTH_SEMANTICS=CHAR', 'CURSOR_SHARING=' . $this->CursorSharing );
         if ( $this->CaseInsensitive )
         {
             $settings[] = 'NLS_COMP=LINGUISTIC';
@@ -2014,6 +2020,7 @@ class eZOracleDB extends eZDBInterface
     public $LobPrefetch = 0;
     /// largest LOB prefetch size that reads CLOBs whole (oci8 3.4.1, Oracle client 23.26)
     const LOB_PREFETCH_MAX = 2000;
+    public $CursorSharing = 'EXACT';
     /// ezoracle.ini [TraceSettings] and what was sent last
     public $TraceClientIdentifier = '';
     public $TraceModule = '';
