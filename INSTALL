@@ -456,7 +456,12 @@ ConnectTimeout=5
    -----------------------------------
 
    Prefetch=500        rows per round trip for queries (oci_set_prefetch)
-   LobPrefetch=16384   LOB bytes sent with the row (oci_set_prefetch_lob)
+   LobPrefetch=2000    LOB bytes sent with the row (oci_set_prefetch_lob; 0 takes
+                       php.ini oci8.prefetch_lob_size). Capped at 2000, with a
+                       notice when more is set: from 2015 up, oci8 3.4.1 with the
+                       Oracle 23.26 client returns every longer CLOB cut short
+                       without an error, and cut image XML was then stored as an
+                       empty image. Longer CLOBs are fetched on their own, whole.
 
    Limits and offsets are applied by the database (OFFSET/FETCH, 12.1+).
 

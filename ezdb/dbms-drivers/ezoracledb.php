@@ -172,6 +172,35 @@ class eZOracleDB extends eZDBInterface
     }
 
     /**
+     * The LOB prefetch size every query gets: ezoracle.ini [PerformanceSettings]
+     * LobPrefetch, or php.ini oci8.prefetch_lob_size when that is 0, capped at
+     * LOB_PREFETCH_MAX. A larger setting is reported once per process.
+     *
+     * With a prefetch size of 2015 or more, oci8 returns every CLOB longer than 2015
+     * characters cut short, without an error: measured with oci8 3.4.1 and the Oracle
+     * 23.26 client against Oracle 26ai, stored CLOBs of 2016 to 4001 characters came
+     * back with 2015 for any size from 2015 up, one of 8000 with 7999 (2016), 6015
+     * (4000) or 2015 (65536), through oci_fetch_all(), oci_fetch_array( OCI_RETURN_LOBS )
+     * and OCILob::load() alike. Sizes up to 2014 read every length whole. The kernel
+     * then read cut XML: an image attribute whose XML did not parse was taken for one
+     * without an image, and the empty image was stored over it.
+     */
+    function lobPrefetchSize()
+    {
+        static $reported = false;
+        $phpIni = (int)ini_get( 'oci8.prefetch_lob_size' );
+        $wanted = $this->LobPrefetch > 0 ? $this->LobPrefetch : max( 0, $phpIni );
+        if ( $wanted > self::LOB_PREFETCH_MAX && !$reported )
+        {
+            $reported = true;
+            eZDebug::writeNotice( 'LOB prefetch size ' . $wanted . ' (ezoracle.ini [PerformanceSettings] LobPrefetch=' . $this->LobPrefetch .
+                                  ', php.ini oci8.prefetch_lob_size=' . $phpIni . ') is capped at ' . self::LOB_PREFETCH_MAX .
+                                  ': with more, oci8 returns CLOBs longer than 2015 characters cut short', __METHOD__ );
+        }
+        return min( $wanted, self::LOB_PREFETCH_MAX );
+    }
+
+    /**
      * The connect string the driver uses: ezoracle.ini [ConnectionSettings]
      * ConnectString, or a descriptor built from Hosts[] and ServiceName (with
      * failover, load balancing, connect timeout and, for DRCP, SERVER=POOLED),
@@ -480,9 +509,11 @@ class eZOracleDB extends eZDBInterface
             {
                 oci_set_prefetch( $statement, $this->Prefetch );
             }
-            if ( $isRead && $this->LobPrefetch > 0 && function_exists( 'oci_set_prefetch_lob' ) )
+            if ( $isRead && function_exists( 'oci_set_prefetch_lob' ) )
             {
-                @oci_set_prefetch_lob( $statement, $this->LobPrefetch );
+                // always set, so php.ini oci8.prefetch_lob_size is capped too: above
+                // LOB_PREFETCH_MAX oci8 hands back CLOBs cut short without an error
+                @oci_set_prefetch_lob( $statement, $this->lobPrefetchSize() );
             }
 
             if ( $this->StatementCounts )
@@ -1981,6 +2012,8 @@ class eZOracleDB extends eZDBInterface
     /// ezoracle.ini [PerformanceSettings]
     public $Prefetch = 0;
     public $LobPrefetch = 0;
+    /// largest LOB prefetch size that reads CLOBs whole (oci8 3.4.1, Oracle client 23.26)
+    const LOB_PREFETCH_MAX = 2000;
     /// ezoracle.ini [TraceSettings] and what was sent last
     public $TraceClientIdentifier = '';
     public $TraceModule = '';
