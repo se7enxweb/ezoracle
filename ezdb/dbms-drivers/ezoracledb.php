@@ -790,6 +790,12 @@ class eZOracleDB extends eZDBInterface
         if ( $statement )
         {
             oci_free_statement( $statement );
+            // A write makes the query cache's results for its tables stale
+            // (an anonymous PL/SQL block: all of them).
+            if ( class_exists( 'eZDBQueryCache' ) )
+            {
+                eZDBQueryCache::noteWrite( $this, $sql );
+            }
         }
         else
         {
@@ -836,6 +842,19 @@ class eZOracleDB extends eZDBInterface
         if ( !$this->isConnected() )
         {
             return $resultArray;
+        }
+
+        // The query cache (settings/querycache.ini): the rows, while current.
+        // Keyed by the statement as the caller wrote it and its parameters,
+        // before the row limit is put into the text below.
+        $cacheTicket = null;
+        if ( class_exists( 'eZDBQueryCache' ) )
+        {
+            $cacheTicket = eZDBQueryCache::lookup( $this, $sql, $params, $cached );
+            if ( $cached !== null )
+            {
+                return $cached;
+            }
         }
 
         $limit = -1;
@@ -1012,6 +1031,11 @@ class eZOracleDB extends eZDBInterface
 
         eZDebug::accumulatorStop( 'oracle_loop' );
         oci_free_statement( $statement );
+
+        if ( $cacheTicket !== null )
+        {
+            eZDBQueryCache::store( $cacheTicket, $resultArray );
+        }
 
         return $resultArray;
     }
