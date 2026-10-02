@@ -1,9 +1,11 @@
 #!/usr/bin/env php
 <?php
+// @description Drop all Exponential objects in the current Oracle schema, keeping the user and tablespaces
 //
 // ## BEGIN COPYRIGHT, LICENSE AND WARRANTY NOTICE ##
 // SOFTWARE NAME: eZ 0racle
 // SOFTWARE RELEASE: 2.1.x
+// COPYRIGHT NOTICE: Copyright (C) 1998 - 2026 7x & Exponential Foundation
 // COPYRIGHT NOTICE: Copyright (C) 1999-2013 eZ Systems AS
 // SOFTWARE LICENSE: GNU General Public License v2.0
 // NOTICE: >
@@ -26,7 +28,7 @@
 //
 
 /**
- Drops all objects (of types used by eZ Publish) in the current schema.
+ Drops all objects (of the types Exponential uses) in the current schema.
  Keeps user and associated tablespaces.
  Purges user's recycle bin.
 */

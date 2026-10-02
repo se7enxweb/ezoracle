@@ -1,4 +1,5 @@
 #!/bin/bash
+# @description Initialize the Oracle database for Exponential: create the schema and load the data
 
 RES_COL=60
 # terminal sequence to move to that column. You could change this

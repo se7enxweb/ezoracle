@@ -1,7 +1,9 @@
 <?php
+// @description Purge binary files of the Oracle DFS cluster handler
 /**
  * Cluster binary files purge script for oracle DFS implementation
  *
+ * @copyright Copyright (C) 1998 - 2026 7x & Exponential Foundation. All rights reserved.
  * @copyright Copyright (C) eZ Systems AS. All rights reserved.
  * @license For full copyright and license information view LICENSE file distributed with this source code.
  *
@@ -14,7 +16,7 @@ require 'autoload.php';
 $cli = eZCLI::instance();
 $script = eZScript::instance( array(
     'description' =>
-        "eZ Publish binary files purge for Oracle DFS handler\n" .
+        "Exponential binary files purge for the Oracle DFS handler\n" .
         "Physically purges expired (leftover) binary files\n",
     'use-session' => false,
     'use-modules' => false,
