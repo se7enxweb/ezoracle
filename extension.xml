@@ -2,7 +2,7 @@
 <software>
     <metadata>
         <name>ezoracle - Oracle database driver for Exponential</name>
-        <version>2.3.4</version>
+        <version>2.3.5</version>
         <copyright>Copyright (C) 1998 - 2026 7x &amp; Exponential Foundation. Copyright (C) 1999-2014 eZ Systems AS, 2024-2026 7x. All rights reserved.</copyright>
         <license>GNU General Public License v2.0 (or any later version)</license>
         <info_url>https://github.com/se7enxweb/ezoracle</info_url>
