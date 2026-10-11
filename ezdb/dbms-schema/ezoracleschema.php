@@ -967,7 +967,8 @@ BEGIN\n".
             {
                 foreach( $blobs as $blobcol )
                 {
-                    if ( strlen( $row[$blobcol] ) > 4000 )
+                    // a SQL literal holds at most 4000 bytes
+                    if ( strlen( (string)$row[$blobcol] ) > 4000 )
                     {
                         $splitrows[] = $i;
                     }
@@ -1012,7 +1013,7 @@ BEGIN\n".
                 }
                 if ( in_array( $i, $splitrows ) && in_array( $j, $blobs ) )
                 {
-                    $dataText .= 'empty_clob()';
+                    $dataText .= $row[$j] === null ? 'NULL' : 'empty_clob()';
                 }
                 else
                 {
@@ -1051,14 +1052,23 @@ BEGIN\n".
                     $insert = substr( $insert, 0, -2 ) . ";\n";
                     foreach ( $blobs as $blobcol )
                     {
-                        while( ( $len = strlen( $row[$blobcol] ) > 4000 ) )
+                        // NULL stays NULL (no locator to append to)
+                        if ( $row[$blobcol] === null )
+                            continue;
+                        // Oracle counts a CLOB in characters, not bytes: the value is
+                        // cut at character boundaries into literals of at most
+                        // CLOB_CHUNK_BYTES bytes, and DBMS_LOB.APPEND() takes no
+                        // amount, so no length has to be worked out here (an amount in
+                        // bytes failed with ORA-22921 on every multibyte text, and a
+                        // character past the BMP counts twice in a CLOB)
+                        foreach ( self::splitClobText( $row[$blobcol] ) as $chunk )
                         {
-                            $insert .= "dbms_lob.writeappend(v_$blobcol, 4000, '" . $this->escapeSQLString( substr( $row[$blobcol], 0, 4000 ) ). "');\n";
-                            $row[$blobcol] = substr( $row[$blobcol], 4000 );
+                            $insert .= "dbms_lob.append(v_$blobcol, TO_CLOB('" . $this->escapeSQLString( $chunk ) . "'));\n";
                         }
-                        $insert .= "dbms_lob.writeappend(v_$blobcol, " . strlen( $row[$blobcol] ) . ", '" . $this->escapeSQLString( $row[$blobcol] ) . "');\n";
                     }
-                    $insert .= "COMMIT;\nEND;"; // plsql does not parse with final ';' anyway
+                    // no COMMIT here: the caller owns the transaction (insertSchema()
+                    // loads all the data in one), so a failing row keeps nothing behind
+                    $insert .= "END;"; // plsql does not parse with final ';' anyway
                     $sqlList[] = $insert;
                 }
                 else
@@ -1272,6 +1282,49 @@ BEGIN\n".
         }
 
         return true;
+    }
+
+    /**
+     * The largest piece, in bytes, of a CLOB value in one string literal of the
+     * PL/SQL that generateTableInsertSQLList() writes: a SQL literal may not be
+     * longer than 4000 bytes, and TO_CLOB() takes a SQL value.
+     */
+    const CLOB_CHUNK_BYTES = 4000;
+
+    /**
+     * Cuts $text into pieces of at most $maxBytes bytes, never inside a UTF-8
+     * character (a character cut in two was stored as a broken one, or failed).
+     * Text that is not valid UTF-8 is cut at $maxBytes bytes, as before.
+     *
+     * @param string $text
+     * @param int $maxBytes
+     * @return string[]
+     */
+    static function splitClobText( $text, $maxBytes = self::CLOB_CHUNK_BYTES )
+    {
+        $text = (string)$text;
+        $chunks = array();
+        $utf8 = preg_match( '//u', $text ) === 1;
+        while ( strlen( $text ) > $maxBytes )
+        {
+            $cut = $maxBytes;
+            // step back over UTF-8 continuation bytes (10xxxxxx) to a character start
+            while ( $utf8 && $cut > 0 && ( ord( $text[$cut] ) & 0xC0 ) === 0x80 )
+            {
+                --$cut;
+            }
+            if ( $cut === 0 )
+            {
+                $cut = $maxBytes;
+            }
+            $chunks[] = substr( $text, 0, $cut );
+            $text = (string)substr( $text, $cut );
+        }
+        if ( $text !== '' )
+        {
+            $chunks[] = $text;
+        }
+        return $chunks;
     }
 
     function escapeSQLString( $value )
