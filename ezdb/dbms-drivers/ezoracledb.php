@@ -175,6 +175,72 @@ class eZOracleDB extends eZDBInterface
         $this->SlowQueryLog = basename( (string)$get( 'LogSettings', 'SlowQueryLog', 'oracle-slow.log' ) );
         $this->MaskLiterals = $enabled( $get( 'LogSettings', 'MaskLiterals', 'enabled' ) );
         $this->StatementCounts = $enabled( $get( 'LogSettings', 'StatementCounts', 'disabled' ) );
+
+        // [QuotedIdentifierSettings]
+        $names = $get( 'QuotedIdentifierSettings', 'ColumnNames', null );
+        if ( is_array( $names ) )
+        {
+            $this->QuotedColumnNames = array();
+            foreach ( $names as $name )
+            {
+                $name = strtolower( trim( $name ) );
+                // a plain identifier only: it goes into a regular expression and into the SQL
+                if ( preg_match( '/^[a-z][a-z0-9_]*$/', $name ) )
+                    $this->QuotedColumnNames[] = $name;
+            }
+        }
+        $this->QuotedColumnPattern = false;
+    }
+
+    /**
+     * Quotes the column names of ezoracle.ini [QuotedIdentifierSettings] ColumnNames
+     * (Oracle reserved words that extensions use as column names: comment, mode)
+     * in $sql, upper case, as the schema handler creates them
+     * (eZOracleSchema::quoteIdentifier()): SELECT comment FROM cjwnl_approval
+     * becomes SELECT "COMMENT" FROM cjwnl_approval, which Oracle accepts, and the
+     * result key is still 'comment'. The statements of every caller go through
+     * here, so the extensions and eZPersistentObject stay as they are on the other
+     * databases.
+     *
+     * Left alone: string literals, quoted identifiers, comments, bind variables
+     * (:comment), names inside a longer one (comment_id, t_mode), the keyword uses
+     * LOCK TABLE ... IN EXCLUSIVE MODE / SHARE MODE and COMMENT ON ... statements.
+     *
+     * @param string $sql
+     * @return string
+     */
+    function quoteReservedColumnNames( $sql )
+    {
+        if ( !$this->QuotedColumnNames )
+        {
+            return $sql;
+        }
+        if ( $this->QuotedColumnPattern === false )
+        {
+            $this->QuotedColumnPattern = '/\b(' . implode( '|', $this->QuotedColumnNames ) . ')\b/i';
+        }
+        // the quick test, for the statements (nearly all) that have none of the names
+        if ( !preg_match( $this->QuotedColumnPattern, $sql ) || preg_match( '/^\s*(LOCK|COMMENT)\b/i', $sql ) )
+        {
+            return $sql;
+        }
+        $names = implode( '|', $this->QuotedColumnNames );
+        // literals ('it''s'), quoted identifiers, -- and /* */ comments are kept as they are
+        $parts = preg_split( '/(\'(?:[^\']|\'\')*\'|"[^"]*"|--[^\n]*|\/\*.*?\*\/)/s', $sql, -1, PREG_SPLIT_DELIM_CAPTURE );
+        foreach ( $parts as $i => $part )
+        {
+            if ( $i % 2 === 1 || $part === '' )
+                continue;
+            $parts[$i] = preg_replace_callback(
+                '/(\b(?:EXCLUSIVE|SHARE)\s+)?(?<![\w$#:])(' . $names . ')(?![\w$#])/i',
+                function ( $m )
+                {
+                    // IN [ROW] EXCLUSIVE MODE / IN [ROW] SHARE MODE is the keyword
+                    return $m[1] !== '' ? $m[0] : '"' . strtoupper( $m[2] ) . '"';
+                },
+                $part );
+        }
+        return implode( '', $parts );
     }
 
     /**
@@ -496,7 +562,8 @@ class eZOracleDB extends eZDBInterface
             return false;
         }
         $this->applyTraceTags();
-        $isRead = (bool)preg_match( '/^[\s(]*(SELECT|WITH)\b/i', $sql );
+        $sql = $this->quoteReservedColumnNames( $sql );
+        $isRead =(bool)preg_match( '/^[\s(]*(SELECT|WITH)\b/i', $sql );
         $type = strtoupper( (string)strtok( ltrim( $sql, " \t\r\n(" ), " \t\r\n(" ) );
 
         for ( $attempt = 0; ; ++$attempt )
@@ -644,6 +711,15 @@ class eZOracleDB extends eZDBInterface
         $name = ( is_array( $fieldDef ) && isset( $fieldDef['name'] ) && $fieldDef['name'] !== '' )
               ? $fieldDef['name']
               : 'ezbind' . count( $this->BindVariableArray );
+        // eZPersistentObject names the placeholder after the field: a reserved word
+        // (:comment, :mode, :size ...) or a name that is no identifier is refused by
+        // Oracle (ORA-01745), so such a name gets a prefix
+        if ( !preg_match( '/^[A-Za-z][A-Za-z0-9_]{0,25}$/', $name ) ||
+             ( class_exists( 'eZOracleSchema' ) && in_array( strtolower( $name ), eZOracleSchema::reservedKeywordList() ) ) ||
+             in_array( strtolower( $name ), $this->QuotedColumnNames ) )
+        {
+            $name = 'ezb_' . substr( preg_replace( '/[^A-Za-z0-9_]/', '_', $name ), 0, 20 ) . count( $this->BindVariableArray );
+        }
         $this->BindVariableArray[] = array( 'name' => $name,
                                             'dbname' => ':' . $name,
                                             'value' => $value );
@@ -2057,6 +2133,11 @@ class eZOracleDB extends eZDBInterface
     public $SlowQueryLog = 'oracle-slow.log';
     public $MaskLiterals = true;
     public $StatementCounts = false;
+    // [QuotedIdentifierSettings] ColumnNames: column names that are Oracle reserved
+    // words, quoted by quoteReservedColumnNames() in every statement
+    public $QuotedColumnNames = array( 'comment', 'mode' );
+    // the regular expression built from them, false when there are none
+    public $QuotedColumnPattern = false;
     /// counters of this connection object
     public $StatementCount = 0;
     public $ReconnectCount = 0;

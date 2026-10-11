@@ -322,7 +322,7 @@ class eZOracleSchema extends eZDBSchemaInterface
         foreach ( is_array( $resultArray ) ? $resultArray : array() as $row )
         {
             $triggerBody =& $row['trigger_body'];
-            if ( !is_string( $triggerBody ) || !preg_match( '/SELECT\s+(\w+)\.nextval\s+INTO\s+:new\.(\w+)\s+FROM\s+dual/i', $triggerBody, $matches ) )
+            if ( !is_string( $triggerBody ) || !preg_match( '/SELECT\s+(\w+)\.nextval\s+INTO\s+:new\."?(\w+)"?\s+FROM\s+dual/i', $triggerBody, $matches ) )
                 continue;
 
             $seqName =& $matches[1];
@@ -441,11 +441,11 @@ class eZOracleSchema extends eZDBSchemaInterface
         {
             if ( is_array( $fieldDef ) )
             {
-                $fieldNames[] = $fieldDef['name'];
+                $fieldNames[] = self::quoteIdentifier( $fieldDef['name'] );
             }
             else
             {
-                $fieldNames[] = $fieldDef;
+                $fieldNames[] = self::quoteIdentifier( $fieldDef );
             }
         }
         $sql .= '( ' . join ( ', ', $fieldNames ) . ' )';
@@ -506,7 +506,7 @@ class eZOracleSchema extends eZDBSchemaInterface
     {
         $oraNumericTypes = array( 'INTEGER', 'FLOAT', 'DOUBLE PRECISION', 'NUMBER', 'BINARY_DOUBLE' ); // const
 
-        $sql_def = $field_name . ' ';
+        $sql_def = self::quoteIdentifier( $field_name ) . ' ';
 
         $oraType = eZOracleSchema::getOracleType( $def['type'] );
         $isNumericField = in_array( $oraType, $oraNumericTypes );
@@ -615,9 +615,9 @@ class eZOracleSchema extends eZDBSchemaInterface
             // in short: we need to rebuild all table indexes after switching type
             if ( in_array( 'type', $params['different-options'] ) )
             {
-                $sql .= "ALTER TABLE $table_name MODIFY (". $field_name . " NULL);\n" .
-                        "ALTER TABLE $table_name MODIFY (". $field_name . " LONG);\n" .
-                        "ALTER TABLE $table_name MODIFY (" . $field_name . " CLOB);\n" .
+                $sql .= "ALTER TABLE $table_name MODIFY (". self::quoteIdentifier( $field_name ) . " NULL);\n" .
+                        "ALTER TABLE $table_name MODIFY (". self::quoteIdentifier( $field_name ) . " LONG);\n" .
+                        "ALTER TABLE $table_name MODIFY (" . self::quoteIdentifier( $field_name ) . " CLOB);\n" .
                         "DECLARE\n" .
                         "  CURSOR idx_cur IS SELECT index_name FROM user_indexes WHERE table_name='" . strtoupper( $table_name ) . "' AND index_type <> 'LOB';\n" .
                         "BEGIN\n" .
@@ -650,7 +650,7 @@ class eZOracleSchema extends eZDBSchemaInterface
                 "  obj_exists EXCEPTION;\n" .
                 "  PRAGMA EXCEPTION_INIT(obj_exists, -955);\n" .
                 "BEGIN\n" .
-                "  SELECT NVL(MAX($field_name), 0) INTO maxval FROM $table_name;\n" .
+                "  SELECT NVL(MAX(" . self::quoteIdentifier( $field_name ) . "), 0) INTO maxval FROM $table_name;\n" .
                 "  maxval := maxval + 1;\n" . // takes care of 0 elements table too
                 "  EXECUTE IMMEDIATE 'CREATE SEQUENCE $seq_name MINVALUE ' || maxval;\n" .
                 "EXCEPTION WHEN obj_exists THEN\n" .
@@ -787,10 +787,11 @@ class eZOracleSchema extends eZDBSchemaInterface
             $sqlSeq .= "\n/\n";
         // be kind to people that unwittingly save this file with CR-LF line endings
         // (PLSQL does not like that at all, so the trigger would not compile any more)
+        $quotedField = self::quoteIdentifier( $field_name );
         $sqlTrig = "CREATE OR REPLACE TRIGGER $trigName
-BEFORE INSERT ON $table_name FOR EACH ROW WHEN (new.$field_name IS NULL)
+BEFORE INSERT ON $table_name FOR EACH ROW WHEN (new.{$quotedField} IS NULL)
 BEGIN\n".
-"  SELECT $seqName.nextval INTO :new.$field_name FROM dual;\n".
+"  SELECT $seqName.nextval INTO :new.{$quotedField} FROM dual;\n".
 "END;";
        if ( $withClosure )
             $sqlTrig .= "\n/\n";
@@ -955,7 +956,7 @@ BEGIN\n".
             {
                 $defText .= ",$dfnl ";
             }
-            $defText .= $fieldName;
+            $defText .= self::quoteIdentifier( $fieldName );
             ++$entryIndex;
         }
 
@@ -1047,7 +1048,7 @@ BEGIN\n".
                     $insert .= "INSERT INTO $tableName ($dfnl$defText$dfnl) VALUES ($dfnl$dataText$dfnl) RETURNING ";
                     foreach ( $blobs as $blobname => $blobcol )
                     {
-                        $insert .= "$blobname INTO v_$blobcol, ";
+                        $insert .= self::quoteIdentifier( $blobname ) . " INTO v_$blobcol, ";
                     }
                     $insert = substr( $insert, 0, -2 ) . ";\n";
                     foreach ( $blobs as $blobcol )
@@ -1325,6 +1326,27 @@ BEGIN\n".
             $chunks[] = $text;
         }
         return $chunks;
+    }
+
+    /**
+     * $name as Oracle has to see it: an Oracle reserved word (reservedKeywordList(),
+     * e.g. COMMENT or MODE, which extensions use as column names) is quoted, in upper
+     * case, so it is the same column that an unquoted name would have been and the
+     * data dictionary, the driver (eZOracleDB, which quotes these names in the
+     * statements it runs) and a read-back of the schema all agree on it. Any other
+     * name is returned as it is.
+     *
+     * @param string $name
+     * @return string
+     */
+    static function quoteIdentifier( $name )
+    {
+        static $reserved = null;
+        if ( $reserved === null )
+        {
+            $reserved = array_flip( self::reservedKeywordList() );
+        }
+        return isset( $reserved[strtolower( $name )] ) ? '"' . strtoupper( $name ) . '"' : $name;
     }
 
     function escapeSQLString( $value )
