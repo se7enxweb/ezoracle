@@ -1,0 +1,19 @@
+--
+-- Exponential 6.0.15, Oracle: ezuser.login, one account per login.
+--
+-- A new installation has the unique index ezuser_login from the kernel schema
+-- (share/db_schema.dba). On an upgrade nothing here adds it: the statement fails
+-- on a database where two accounts have the same login. Add it with the
+-- command, which lists the duplicates first (also logins that differ only in
+-- case, which signing in cannot tell apart) and adds the index only when there
+-- are none:
+--
+--   ./console exp:user-login-check              (report, changes nothing)
+--   ./console exp:user-login-check --fix-index  (adds the index after a clean report)
+--
+-- What --fix-index runs on Oracle (DDL commits by itself; Oracle stores an empty
+-- login as NULL, and any number of NULLs pass a unique index):
+--
+-- DROP INDEX ezuser_login;
+-- CREATE UNIQUE INDEX ezuser_login ON ezuser ( login );
+--
