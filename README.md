@@ -10,8 +10,8 @@ setup wizard, the kickstarter and `exp:install --db=oracle` can install onto it.
 
 ## Version
 
-The current version is 2.3.1. The changes of this version are in
-[doc/changelogs/2.3.1.md](doc/changelogs/2.3.1.md), older ones in doc/changelogs/.
+The current version is 2.3.7. The changes of this version are in
+[doc/changelogs/2.3.7.md](doc/changelogs/2.3.7.md), older ones in doc/changelogs/.
 
 ## License
 
@@ -25,8 +25,12 @@ is in the LICENSE file.
 - **PHP** 8.0 to 8.5 with the **oci8** extension (PECL oci8 3.4 for PHP 8.4/8.5,
   3.2 for 8.1-8.3), built against an Oracle client (the Instant Client is enough).
 - **Oracle Database** 19c or later. Tested with Oracle AI Database 26ai Free
-  (23.26). The driver uses features from 12.1 (STANDARD_HASH, OFFSET/FETCH);
-  11g and older are not supported.
+  (23.26). From 12.1 on the driver uses STANDARD_HASH and OFFSET/FETCH.
+  11g (11.2) and 12.1 work too: before 12.1 the driver hashes the MD5 string
+  literals of the kernel (URL aliases) in PHP, lets oci8 skip the rows of an
+  offset, and the DFS cluster backend limits with ROWNUM. That path is covered
+  by the unit tests; MD5 of anything other than a literal needs `md5_digest()`
+  from `sql/md5_digest_before_12.1.sql` there.
 - A database character set of **AL32UTF8** (Unicode).
 - An Oracle user that may create sessions, tables, views, triggers,
   sequences and procedures (bin/php/ora-grant.php prints the SQL). The health
@@ -71,6 +75,13 @@ Not in this release, as they could not be tested yet:
 ## Upgrading
 
 From 2.3.0: see "Upgrading" in [doc/changelogs/2.3.1.md](doc/changelogs/2.3.1.md).
+
+## Tests
+
+The unit tests in tests/ need no database. From an Exponential root:
+
+    php vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php extension/ezoracle/tests/eZOracleBeforeRelease12Test.php
+    php vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php extension/ezoracle/tests/eZOracleClobAndReservedWordsTest.php
 
 ## Troubleshooting
 
