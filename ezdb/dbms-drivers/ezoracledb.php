@@ -358,6 +358,11 @@ class eZOracleDB extends eZDBInterface
         $function = $this->Persistent ? 'oci_pconnect' : ( $fresh ? 'oci_new_connect' : 'oci_connect' );
 
         $this->DBConnection = false;
+        // what was read from the previous server is read again from this one:
+        // a reconnect (a Velocity worker, a long CLI script) can reach another
+        // server of the service, of another release or character set
+        $this->ServerMajorVersion = null;
+        $this->DatabaseCharset = null;
         $delay = $this->RetryDelay;
         $error = false;
         for ( $attempt = 0; $attempt <= $this->RetryCount; ++$attempt )
@@ -1143,8 +1148,9 @@ class eZOracleDB extends eZDBInterface
     }
 
     /**
-     * Major version of the server (12 for 12.1, 19 for 19c), read once.
-     * 0 when it cannot be read, e.g. before the connection is made.
+     * Major version of the server (11 for 11g, 12 for 12.1, 19 for 19c), read
+     * once per connection (connect() forgets it). 0 when it cannot be read,
+     * e.g. before the connection is made; 0 is not kept.
      *
      * @return int
      */
@@ -1323,17 +1329,48 @@ class eZOracleDB extends eZDBInterface
      */
     function md5( $str )
     {
-        // An unreadable version (0) takes the path of the current releases
-        $version = $this->serverMajorVersion();
-        if ( $version > 0 && $version < 12 )
+        if ( $this->hasStandardHash() )
         {
-            if ( preg_match( "/^\\s*'((?:[^']++|'')*+)'\\s*\$/s", $str, $matches ) )
-            {
-                return " '" . md5( str_replace( "''", "'", $matches[1] ) ) . "' ";
-            }
-            return " md5_digest( $str ) ";
+            return " NVL( LOWER( RAWTOHEX( STANDARD_HASH( $str, 'MD5' ) ) ), 'd41d8cd98f00b204e9800998ecf8427e' ) ";
         }
-        return " NVL( LOWER( RAWTOHEX( STANDARD_HASH( $str, 'MD5' ) ) ), 'd41d8cd98f00b204e9800998ecf8427e' ) ";
+        $value = self::stringLiteralValue( $str );
+        if ( $value !== null )
+        {
+            return " '" . md5( $value ) . "' ";
+        }
+        return " md5_digest( $str ) ";
+    }
+
+    /**
+     * False only when the server is known to be older than 12.1, which has no
+     * STANDARD_HASH(). An unreadable version (0) counts as a current release.
+     *
+     * @return bool
+     */
+    function hasStandardHash()
+    {
+        $version = $this->serverMajorVersion();
+        return $version == 0 || $version >= 12;
+    }
+
+    /**
+     * The value of $sql when it is exactly one plain string literal ('...',
+     * with '' for a quote, as escapeString() writes it), surrounding white
+     * space allowed; null for anything else: an expression, a column, an
+     * N'...' (national character set) or q'[...]' literal, or a literal that
+     * is not closed. The pattern is possessive, so a long literal cannot run
+     * into the backtracking limit.
+     *
+     * @param string $sql
+     * @return string|null
+     */
+    static function stringLiteralValue( $sql )
+    {
+        if ( !is_string( $sql ) || preg_match( "/^\\s*'((?:[^']++|'')*+)'\\s*\$/sD", $sql, $matches ) !== 1 )
+        {
+            return null;
+        }
+        return str_replace( "''", "'", $matches[1] );
     }
 
     function bitAnd( $arg1, $arg2 )
