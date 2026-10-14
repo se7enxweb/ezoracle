@@ -110,6 +110,8 @@ class eZDFSFileHandlerOracleBackend
             self::$dbparams['persistent_connection'] = $fileINI->hasVariable( 'eZDFSClusteringSettings', 'DBPersistentConnection' ) ? ( $fileINI->variable( 'eZDFSClusteringSettings', 'DBPersistentConnection' ) == 'enabled' ) : false;
         }
 
+        // read again from the server this connection reaches
+        $this->serverMajorVersion = null;
         $maxTries = self::$dbparams['max_connect_tries'];
         $tries = 0;
         while ( $tries < $maxTries )
@@ -1065,7 +1067,7 @@ class eZDFSFileHandlerOracleBackend
         // $limit is array( offset, count )
         if ( is_array( $limit ) && array_sum( $limit ) )
         {
-            $query .= ' ORDER BY name OFFSET ' . (int)$limit[0] . ' ROWS FETCH NEXT ' . (int)$limit[1] . ' ROWS ONLY';
+            $query = self::limitQuery( $query . ' ORDER BY name', (int)$limit[0], (int)$limit[1], $this->serverMajorVersion() );
         }
 
         $rows = $this->_query( $query, "_getFileList( array( " . implode( ', ', is_array( $scopes ) ? $scopes : array() ) . " ), $excludeScopes )", true, $bindparams, self::RETURN_DATA );
@@ -1081,6 +1083,52 @@ class eZDFSFileHandlerOracleBackend
             $filePathList[] = $row['NAME'];
 
         return $filePathList;
+    }
+
+    /**
+     * $query (ordered) cut to $count rows from $offset on: OFFSET / FETCH NEXT
+     * from Oracle 12.1 on, ROWNUM before (11g has no row limiting clause) and
+     * when the version is not known.
+     *
+     * @param string $query
+     * @param int $offset
+     * @param int $count
+     * @param int $serverMajorVersion 0 when unknown
+     * @return string
+     */
+    public static function limitQuery( $query, $offset, $count, $serverMajorVersion )
+    {
+        $offset = max( 0, (int)$offset );
+        $count = max( 0, (int)$count );
+        if ( $serverMajorVersion >= 12 )
+        {
+            return $query . ' OFFSET ' . $offset . ' ROWS FETCH NEXT ' . $count . ' ROWS ONLY';
+        }
+        return 'SELECT name FROM ( SELECT q.name, ROWNUM ezdfs_rn FROM ( ' . $query . ' ) q WHERE ROWNUM <= ' .
+               ( $offset + $count ) . ' ) WHERE ezdfs_rn > ' . $offset;
+    }
+
+    /**
+     * Major version of the server of the connection, read once per connection
+     * (_connect() forgets it); 0 when it cannot be read, which is not kept.
+     *
+     * @return int
+     */
+    public function serverMajorVersion()
+    {
+        if ( $this->serverMajorVersion === null )
+        {
+            $banner = ( $this->db && function_exists( 'oci_server_version' ) ) ? oci_server_version( $this->db ) : false;
+            // "... Release 19.0.0.0.0 - Production Version 19.3.0.0.0" (18c on), "... Release 11.2.0.2.0 ..." before
+            if ( !is_string( $banner ) ||
+                 ( !preg_match( '#\bVersion ([0-9]+)#', $banner, $matches ) &&
+                   !preg_match( '#\bRelease ([0-9]+)#', $banner, $matches ) ) )
+            {
+                return 0;
+            }
+            $this->serverMajorVersion = (int)$matches[1];
+        }
+        return $this->serverMajorVersion;
     }
 
     /**
@@ -1891,6 +1939,12 @@ class eZDFSFileHandlerOracleBackend
      * DB connection handle
      **/
     public $db = null;
+
+    /**
+     * Major version of the server of $db, read once (see serverMajorVersion())
+     * @var int|null
+     **/
+    protected $serverMajorVersion = null;
 
     /**
      * DB connexion parameters
