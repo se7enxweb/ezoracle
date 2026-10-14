@@ -244,11 +244,17 @@ EOF
    o  Create md5_digest and bitor functions (optional)
 
       The driver no longer needs them: it computes MD5 with STANDARD_HASH
-      (Oracle 12.1 and later) and bitwise OR with BITAND. Create them only
-      for SQL of your own that calls md5_digest() or bitor(). Your user will
-      require `CREATE PROCEDURE' privilege for this.
+      (Oracle 12.1 and later) and bitwise OR with BITAND. Before 12.1 the
+      driver hashes string literals in PHP, and only MD5 of anything else
+      still calls md5_digest(). Create them only for SQL of your own that
+      calls md5_digest() or bitor(). Your user will require
+      `CREATE PROCEDURE' privilege for this.
       $ sqlplus scott/tiger@orcl < extension/ezoracle/sql/md5_digest.sql
       $ sqlplus scott/tiger@orcl < extension/ezoracle/sql/bitor.sql
+      md5_digest.sql itself uses STANDARD_HASH; before 12.1 (11g) create
+      the function from md5_digest_before_12.1.sql instead, which uses
+      dbms_obfuscation_toolkit (removed in 21c):
+      $ sqlplus scott/tiger@orcl < extension/ezoracle/sql/md5_digest_before_12.1.sql
 
    o  Initialize the schema
 

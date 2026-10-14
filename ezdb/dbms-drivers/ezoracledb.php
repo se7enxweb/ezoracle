@@ -1127,12 +1127,7 @@ class eZOracleDB extends eZDBInterface
      */
     function canAppendRowLimit( $sql )
     {
-        if ( $this->ServerMajorVersion === null )
-        {
-            $version = $this->databaseServerVersion();
-            $this->ServerMajorVersion = $version ? (int)$version['values'][0] : 0;
-        }
-        if ( $this->ServerMajorVersion < 12 )
+        if ( $this->serverMajorVersion() < 12 )
         {
             return false;
         }
@@ -1145,6 +1140,26 @@ class eZOracleDB extends eZDBInterface
             return false;
         }
         return true;
+    }
+
+    /**
+     * Major version of the server (12 for 12.1, 19 for 19c), read once.
+     * 0 when it cannot be read, e.g. before the connection is made.
+     *
+     * @return int
+     */
+    function serverMajorVersion()
+    {
+        if ( $this->ServerMajorVersion === null )
+        {
+            $version = $this->databaseServerVersion();
+            if ( !$version )
+            {
+                return 0;
+            }
+            $this->ServerMajorVersion = (int)$version['values'][0];
+        }
+        return $this->ServerMajorVersion;
     }
 
     /**
@@ -1298,9 +1313,26 @@ class eZOracleDB extends eZDBInterface
      * schema (the old md5_digest() used dbms_obfuscation_toolkit, removed in
      * 21c). Oracle stores '' as NULL, and STANDARD_HASH( NULL ) is NULL, so
      * NULL gives the hash of the empty string, as md5_digest() did.
+     *
+     * Before 12.1 there is no STANDARD_HASH(). A string literal, which is what
+     * the kernel passes (eZURLAliasML, eZURLAliasQuery), is then hashed by PHP:
+     * the result is the same, and it is what eZURLAliasML stores in text_md5.
+     * Anything else goes to an md5_digest() function in the schema, as before
+     * 2.3.1: on those releases created from sql/md5_digest_before_12.1.sql
+     * (dbms_obfuscation_toolkit; sql/md5_digest.sql needs 12.1 itself).
      */
     function md5( $str )
     {
+        // An unreadable version (0) takes the path of the current releases
+        $version = $this->serverMajorVersion();
+        if ( $version > 0 && $version < 12 )
+        {
+            if ( preg_match( "/^\\s*'((?:[^']++|'')*+)'\\s*\$/s", $str, $matches ) )
+            {
+                return " '" . md5( str_replace( "''", "'", $matches[1] ) ) . "' ";
+            }
+            return " md5_digest( $str ) ";
+        }
         return " NVL( LOWER( RAWTOHEX( STANDARD_HASH( $str, 'MD5' ) ) ), 'd41d8cd98f00b204e9800998ecf8427e' ) ";
     }
 
@@ -2087,7 +2119,7 @@ class eZOracleDB extends eZDBInterface
     var $BindVariableArray = array();
     /// NLS_CHARACTERSET of the database, read once (see databaseCharset())
     public $DatabaseCharset = null;
-    /// major version of the server, read once (see canAppendRowLimit())
+    /// major version of the server, read once (see serverMajorVersion())
     public $ServerMajorVersion = null;
     /// NULL in text columns is returned as '' (site.ini [DatabaseSettings] OracleEmptyStringForNull)
     public $EmptyStringForNullText = false;
