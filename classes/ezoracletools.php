@@ -131,7 +131,16 @@ class eZOracleTools
             $mailObj->addReceiver( $receiver );
         }
         $mailObj->setSubject( "[$status] Oracle $job of " . $siteINI->variable( 'SiteSettings', 'SiteName' ) );
-        $mailObj->setBody( $this->text() );
+        // the report as it is for the text part, and in the kernel's mail layout for the HTML part (Exponential
+        // 6.0.15 and later; an older kernel sends the text only)
+        if ( class_exists( 'expMailTemplateBody' ) && method_exists( 'expMailTemplateBody', 'fromText' ) )
+        {
+            expMailTemplateBody::fromText( $mailObj, $this->text(), array( 'title' => $mailObj->subject() ) );
+        }
+        else
+        {
+            $mailObj->setBody( $this->text() );
+        }
         $sent = eZMailTransport::send( $mailObj );
         eZLog::write( ( $sent ? 'mailed to ' : 'could not mail to ' ) . implode( ', ', $receivers ), $log );
     }
