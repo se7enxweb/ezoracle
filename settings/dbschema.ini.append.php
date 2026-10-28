@@ -72,6 +72,8 @@ ColumnOptionTranslations[ezcollab_simple_message.data_text2]=null
 ColumnOptionTranslations[ezcollab_simple_message.data_text3]=null
 # who moved an object to the trash and from where (Exponential 6.0.15): Oracle stores an empty string as NULL
 ColumnOptionTranslations[ezcontentobject_trash.trashed_via]=null
+# the siteaccess an order was placed in (Exponential 6.0.15): '' for an order without one, which Oracle stores as NULL
+ColumnOptionTranslations[ezorder.siteaccess]=null
 
 IndexNameTranslation[ezcontentobject_attribute.ezcontentobject_attribute_contentobject_id]=ezco_attr_co_id
 IndexNameTranslation[ezcontentobject_attribute.ezcontentobject_attribute_co_id_ver_lang_code]=ezco_attr_co_id_ver_lang_code
