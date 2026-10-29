@@ -14,7 +14,7 @@ class ezoracleInfo
     {
         return array(
             'Name' => "ezoracle - Oracle database driver for Exponential",
-            'Version' => "2.3.8",
+            'Version' => "2.3.9",
             'Copyright' => "Copyright (C) 1998 - 2026 Exponential Foundation and 7x. All rights reserved. Copyright (C) 1999-2014 eZ Systems AS",
             'License' => "GNU General Public License v2.0 (or any later version)",
             'Info_url' => "https://github.com/se7enxweb/ezoracle"
