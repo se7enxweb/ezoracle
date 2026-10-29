@@ -6,7 +6,7 @@
  * ./bin/php/console ext:ezoracle:gather-stats [--dry-run] [-s <siteaccess>] [--allow-root-user]
  * Options come from ezoracle.ini [StatisticsSettings].
  *
- * @copyright Copyright (C) 2026 7x. All rights reserved.
+ * @copyright Copyright (C) 1998 - 2026 Exponential Foundation and 7x. All rights reserved.
  * @license GNU General Public License v2.0 (or any later version)
  * @package ezoracle
  */
