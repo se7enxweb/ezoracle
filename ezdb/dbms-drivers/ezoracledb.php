@@ -938,6 +938,8 @@ class eZOracleDB extends eZDBInterface
                 return $cached;
             }
         }
+        // the statement as the caller wrote it, for a read that is run again (see the fetch below)
+        $callerSql = $sql;
 
         $limit = -1;
         $offset = 0;
@@ -1002,6 +1004,8 @@ class eZOracleDB extends eZDBInterface
         if ( !$statement )
         {
             eZDebug::accumulatorStop( 'oracle_query' );
+            // like query() and the other drivers: a failed statement inside a transaction invalidates it
+            $this->reportError();
             if ( $this->errorHandling == eZDB::ERROR_HANDLING_EXCEPTIONS )
             {
                 throw new eZDBException( $this->ErrorMessage, $this->ErrorNumber );
@@ -1120,6 +1124,39 @@ class eZOracleDB extends eZDBInterface
         $fetchError = oci_error( $statement );
         if ( $rowCount === false || ( is_array( $fetchError ) && $fetchError['code'] ) )
         {
+            // The connection was lost while the rows came (ORA-03113, ORA-03135 ...): a read outside a transaction
+            // is run again once on a new connection, as executeStatement() does for one lost before it ran. No row
+            // was handed out yet, so nothing is seen twice.
+            if ( is_array( $fetchError ) && $this->isReconnectError( $fetchError['code'] ) && $this->RetryReads &&
+                 $this->TransactionCounter == 0 && !$this->FetchRetrying )
+            {
+                @oci_free_statement( $statement );
+                eZDebug::writeWarning( "The connection was lost while the rows were fetched (" . $fetchError['code'] . "): " .
+                                       "reconnecting to run the statement again:\n" . $sql, __METHOD__ );
+                if ( $this->reconnect() )
+                {
+                    $this->FetchRetrying = true;
+                    try
+                    {
+                        return $this->arrayQuery( $callerSql, $params, $server );
+                    }
+                    finally
+                    {
+                        $this->FetchRetrying = false;
+                    }
+                }
+                $this->ErrorMessage = $fetchError['message'];
+                $this->ErrorNumber = $fetchError['code'];
+                eZDebug::writeError( "Error (" . $fetchError['code'] . "): " . $fetchError['message'] .
+                                     "\nThe connection was lost while the rows were fetched and could not be opened again:\n" . $sql,
+                                     __METHOD__ );
+                $this->reportError();
+                if ( $this->errorHandling == eZDB::ERROR_HANDLING_EXCEPTIONS )
+                {
+                    throw new eZDBException( $this->ErrorMessage, $this->ErrorNumber );
+                }
+                return false;
+            }
             if ( !$this->setError( $statement, 'arrayQuery()', $sql ) )
             {
                 $this->ErrorMessage = 'Fetching the rows failed';
@@ -1127,6 +1164,8 @@ class eZOracleDB extends eZDBInterface
                 eZDebug::writeError( "Fetching the rows failed:\n" . $sql, __METHOD__ );
             }
             oci_free_statement( $statement );
+            // like query() and the other drivers: a failed statement inside a transaction invalidates it
+            $this->reportError();
             if ( $this->errorHandling == eZDB::ERROR_HANDLING_EXCEPTIONS )
             {
                 throw new eZDBException( $this->ErrorMessage, $this->ErrorNumber );
@@ -2233,6 +2272,8 @@ class eZOracleDB extends eZDBInterface
     public $StatementCount = 0;
     public $ReconnectCount = 0;
     public $LastActivity = 0.0;
+    /// true while arrayQuery() runs a read again whose connection was lost while its rows were fetched
+    protected $FetchRetrying = false;
 
     // @todo move this to a static var, and we should shave off a little ram...
     var $CharsetsMap = array(
