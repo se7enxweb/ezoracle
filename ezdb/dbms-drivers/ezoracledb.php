@@ -1112,6 +1112,28 @@ class eZOracleDB extends eZDBInterface
         }
 
         eZDebug::accumulatorStop( 'oracle_loop' );
+
+        // An error Oracle raises while the rows are fetched, after the statement ran (ORA-01722 on a row that
+        // does not convert, ORA-01555, a lost connection): oci_fetch_all() then returns the rows fetched up to
+        // it (with oci8 3.4, 403 of 600 when row 500 fails), or false. That is no result, not a short one:
+        // reported like a failed statement, and never kept by the query cache.
+        $fetchError = oci_error( $statement );
+        if ( $rowCount === false || ( is_array( $fetchError ) && $fetchError['code'] ) )
+        {
+            if ( !$this->setError( $statement, 'arrayQuery()', $sql ) )
+            {
+                $this->ErrorMessage = 'Fetching the rows failed';
+                $this->ErrorNumber = -1;
+                eZDebug::writeError( "Fetching the rows failed:\n" . $sql, __METHOD__ );
+            }
+            oci_free_statement( $statement );
+            if ( $this->errorHandling == eZDB::ERROR_HANDLING_EXCEPTIONS )
+            {
+                throw new eZDBException( $this->ErrorMessage, $this->ErrorNumber );
+            }
+            return false;
+        }
+
         oci_free_statement( $statement );
 
         if ( $cacheTicket !== null )
