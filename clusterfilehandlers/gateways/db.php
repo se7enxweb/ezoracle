@@ -67,9 +67,16 @@ class ezpDbOracleClusterGateway extends ezpClusterGateway
                 "(error #{$error['code']}: {$error['message']})" );
         }
 
-        // metadata === false => file not found
+        // metadata === false => file not found, unless the fetch failed (then a 500, not a 404)
         if ( !$metadata = oci_fetch_array( $statement, OCI_ASSOC ) )
+        {
+            $error = oci_error( $statement );
+            oci_free_statement( $statement );
+            if ( is_array( $error ) && $error['code'] )
+                throw new RuntimeException( "Failed to fetch file metadata for '$filepath' " .
+                    "(error #{$error['code']}: {$error['message']})" );
             return false;
+        }
 
         $this->lob = $metadata['LOB'];
         oci_free_statement( $statement );
@@ -83,8 +90,8 @@ class ezpDbOracleClusterGateway extends ezpClusterGateway
         if ( $offset !== false )
             throw new UnexpectedValueException( "HTTP Range is not supported by " . __CLASS__ );
 
-        // output image data
-        while ( $chunk = $this->lob->read( $this->getChunkSize() ) )
+        // output image data; read() gives false at the end and on an error, and a last chunk of "0" is data
+        while ( ( $chunk = $this->lob->read( $this->getChunkSize() ) ) !== false && $chunk !== '' )
         {
             echo $chunk;
             // in case output_buffering is on in php.ini, take over with out own
@@ -92,6 +99,12 @@ class ezpDbOracleClusterGateway extends ezpClusterGateway
             flush();
             // minor memory optimization trick. See http://blogs.oracle.com/opal/2010/03/reducing_oracle_lob_memory_use.html
             unset( $chunk );
+        }
+        if ( !$this->lob->eof() )
+        {
+            // Content-Length is sent already: the client sees a short body and keeps no truncated file.
+            // An error page now would only be appended to the data.
+            error_log( "ezoracle cluster gateway: reading '$filepath' from the database stopped before its end" );
         }
         $this->lob->free();
         $this->lob = null;

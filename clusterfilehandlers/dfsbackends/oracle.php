@@ -1228,19 +1228,28 @@ class eZDFSFileHandlerOracleBackend
             {
                 $row = oci_fetch_array( $statement, $fetchOpts );
                 $row2 = $row ? oci_fetch_array( $statement, $fetchOpts ) : false;
+                // a fetch that failed (ORA-01555, a lost connection) gives false too: an error, not "no such row"
+                $fetchError = oci_error( $statement );
+                if ( is_array( $fetchError ) && $fetchError['code'] )
+                {
+                    $res = false;
+                }
+            }
+            // read before the statement is freed: oci_error() of a freed statement is a TypeError since PHP 8
+            if ( !$res )
+            {
+                $this->error = oci_error( $statement );
             }
 
             oci_free_statement( $statement );
         }
         else
         {
-            // trick used for error reporting
-            $statement = $this->db;
+            $this->error = oci_error( $this->db );
         }
         eZDebug::accumulatorStop( 'oracle_cluster_query' );
         if ( !$res )
         {
-            $this->error = oci_error( $statement );
             $this->_error( $query, $fname, $error );
             return false;
         }
@@ -1447,13 +1456,18 @@ class eZDFSFileHandlerOracleBackend
                 {
                     $res = oci_num_rows( $statement );
                 }
-                else if ( $return_type == self::RETURN_DATA )
+                else if ( $return_type == self::RETURN_DATA || $return_type == self::RETURN_DATA_BY_COL )
                 {
-                    oci_fetch_all( $statement, $res, 0, 0, OCI_FETCHSTATEMENT_BY_ROW+OCI_ASSOC );
-                }
-                else if ( $return_type == self::RETURN_DATA_BY_COL )
-                {
-                    oci_fetch_all( $statement, $res, 0, 0, OCI_FETCHSTATEMENT_BY_COLUMN+OCI_ASSOC );
+                    $flags = $return_type == self::RETURN_DATA ? OCI_FETCHSTATEMENT_BY_ROW+OCI_ASSOC : OCI_FETCHSTATEMENT_BY_COLUMN+OCI_ASSOC;
+                    $rowCount = oci_fetch_all( $statement, $res, 0, 0, $flags );
+                    // An error raised while the rows are fetched leaves the rows fetched up to it (or none):
+                    // no result, not a short one (a purge or a file list would act on a part of it).
+                    $fetchError = oci_error( $statement );
+                    if ( $rowCount === false || ( is_array( $fetchError ) && $fetchError['code'] ) )
+                    {
+                        $this->error = is_array( $fetchError ) && $fetchError['code'] ? $fetchError : array( 'code' => -1, 'message' => 'Fetching the rows failed' );
+                        $res = false;
+                    }
                 }
             }
 

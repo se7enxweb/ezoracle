@@ -51,8 +51,13 @@ class ezpDfsOracleClusterGateway extends ezpClusterGateway
         }
 
         $metadata = oci_fetch_array( $statement, OCI_ASSOC );
+        // false is "no such file", unless the fetch failed (then a 500, not a 404)
+        $error = $metadata === false ? oci_error( $statement ) : false;
         oci_free_statement( $statement );
 
+        if ( is_array( $error ) && $error['code'] )
+            throw new RuntimeException( "Failed to fetch file metadata for '$filepath' " .
+                "(error #{$error['code']}: {$error['message']})" );
         if ( $metadata === false )
             return false;
         $metadata = array_change_key_case( $metadata );
