@@ -451,8 +451,10 @@ ConnectTimeout=5
                   transaction the driver reconnects; a read (SELECT, WITH) is run
                   again on the new connection (RetryReads=enabled), a write is
                   reported, as it may have been carried out before the connection
-                  broke. Inside a transaction the error is raised as before: the
-                  transaction's work is lost with the session.
+                  broke. A read whose connection is lost while its rows are
+                  fetched is run again once the same way (since 2.3.10). Inside a
+                  transaction the error is raised as before: the transaction's
+                  work is lost with the session.
    CallTimeout=30000
                   milliseconds one round trip may take (oci_set_call_timeout,
                   client 18c+); longer calls end with ORA-03156. Data Pump runs of

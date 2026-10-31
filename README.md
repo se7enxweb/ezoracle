@@ -10,8 +10,8 @@ setup wizard, the kickstarter and `exp:install --db=oracle` can install onto it.
 
 ## Version
 
-The current version is 2.3.9. The changes of this version are in
-[doc/changelogs/2.3.9.md](doc/changelogs/2.3.9.md), older ones in doc/changelogs/.
+The current version is 2.3.10. The changes of this version are in
+[doc/changelogs/2.3.10.md](doc/changelogs/2.3.10.md), older ones in doc/changelogs/.
 
 ## License
 
@@ -82,6 +82,14 @@ The unit tests in tests/ need no database. From an Exponential root:
 
     php vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php extension/ezoracle/tests/eZOracleBeforeRelease12Test.php
     php vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php extension/ezoracle/tests/eZOracleClobAndReservedWordsTest.php
+
+eZOracleFetchErrorTest.php (errors raised while rows are fetched, in the driver
+and the cluster code) runs the driver on a stand-in for the oci8 functions, so
+it needs a PHP without oci8 and is skipped where oci8 is loaded. With a PHP
+that loads oci8, leave out the php.ini and load what PHPUnit needs:
+
+    php -n -d extension=dom -d extension=mbstring -d extension=xmlwriter -d extension=xmlreader \
+        vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php extension/ezoracle/tests/eZOracleFetchErrorTest.php
 
 ## Troubleshooting
 
