@@ -74,6 +74,167 @@ ColumnOptionTranslations[ezcollab_simple_message.data_text3]=null
 ColumnOptionTranslations[ezcontentobject_trash.trashed_via]=null
 # the siteaccess an order was placed in (Exponential 6.0.15): '' for an order without one, which Oracle stores as NULL
 ColumnOptionTranslations[ezorder.siteaccess]=null
+#
+# The kernel tables and columns of Exponential 6.0.15. Oracle stores an empty string as NULL, so
+# each text column that is NOT NULL elsewhere (mostly with a '' default) is nullable here (the schema
+# handler makes every text column nullable as well; these lines state it column by column).
+# Primary key columns stay NOT NULL through the key. Upgrades: update/database/ezpublish/6.0/.
+# the audit index
+ColumnOptionTranslations[expaudit_event.channel]=null
+ColumnOptionTranslations[expaudit_event.domain_name]=null
+ColumnOptionTranslations[expaudit_event.file_name]=null
+ColumnOptionTranslations[expaudit_event.name]=null
+ColumnOptionTranslations[expaudit_file.state]=null
+ColumnOptionTranslations[expaudit_file.verified]=null
+# bookmark folders and bookmarked views
+ColumnOptionTranslations[expbookmark_folder.name]=null
+ColumnOptionTranslations[expbookmark_view.module_name]=null
+ColumnOptionTranslations[expbookmark_view.view_name]=null
+# e-mail preferences and consent
+ColumnOptionTranslations[expmail_category.frequencies]=null
+ColumnOptionTranslations[expmail_category.handler_class]=null
+ColumnOptionTranslations[expmail_category.identifier]=null
+ColumnOptionTranslations[expmail_category.name]=null
+ColumnOptionTranslations[expmail_consent_log.action]=null
+ColumnOptionTranslations[expmail_consent_log.category]=null
+ColumnOptionTranslations[expmail_consent_log.email]=null
+ColumnOptionTranslations[expmail_consent_log.ip]=null
+ColumnOptionTranslations[expmail_consent_log.new_value]=null
+ColumnOptionTranslations[expmail_consent_log.old_value]=null
+ColumnOptionTranslations[expmail_consent_log.recipient_key]=null
+ColumnOptionTranslations[expmail_consent_log.siteaccess]=null
+ColumnOptionTranslations[expmail_consent_log.source]=null
+ColumnOptionTranslations[expmail_pending.category]=null
+ColumnOptionTranslations[expmail_pending.kind]=null
+ColumnOptionTranslations[expmail_pending.recipient_key]=null
+ColumnOptionTranslations[expmail_preference.category]=null
+ColumnOptionTranslations[expmail_preference.frequency]=null
+ColumnOptionTranslations[expmail_preference.recipient_key]=null
+ColumnOptionTranslations[expmail_preference.state]=null
+ColumnOptionTranslations[expmail_suppression.email_hash]=null
+ColumnOptionTranslations[expmail_suppression.reason]=null
+# personal API keys
+ColumnOptionTranslations[expapikey.key_prefix]=null
+ColumnOptionTranslations[expapikey.last_ip]=null
+ColumnOptionTranslations[expapikey.name]=null
+ColumnOptionTranslations[expapikey.salt]=null
+ColumnOptionTranslations[expapikey.scopes]=null
+ColumnOptionTranslations[expapikey.secret_hash]=null
+# passkeys
+ColumnOptionTranslations[exppasskey.aaguid]=null
+ColumnOptionTranslations[exppasskey.credential_hash]=null
+ColumnOptionTranslations[exppasskey.last_ip]=null
+ColumnOptionTranslations[exppasskey.name]=null
+ColumnOptionTranslations[exppasskey.transports]=null
+ColumnOptionTranslations[exppasskey.user_handle]=null
+# the run history of the import and export tools
+ColumnOptionTranslations[exp_transfer_run.detail_url]=null
+ColumnOptionTranslations[exp_transfer_run.direction]=null
+ColumnOptionTranslations[exp_transfer_run.engine]=null
+ColumnOptionTranslations[exp_transfer_run.error]=null
+ColumnOptionTranslations[exp_transfer_run.file_ref]=null
+ColumnOptionTranslations[exp_transfer_run.format]=null
+ColumnOptionTranslations[exp_transfer_run.job_ref]=null
+ColumnOptionTranslations[exp_transfer_run.kind]=null
+ColumnOptionTranslations[exp_transfer_run.scope]=null
+ColumnOptionTranslations[exp_transfer_run.scope_ref]=null
+ColumnOptionTranslations[exp_transfer_run.siteaccess]=null
+ColumnOptionTranslations[exp_transfer_run.state]=null
+ColumnOptionTranslations[exp_transfer_run.title]=null
+ColumnOptionTranslations[exp_transfer_run.tool]=null
+ColumnOptionTranslations[exp_transfer_run.tool_ref]=null
+# data table connections, the secret store and synchronisation
+ColumnOptionTranslations[exp_data_connection.database_name]=null
+ColumnOptionTranslations[exp_data_connection.description]=null
+ColumnOptionTranslations[exp_data_connection.engine]=null
+ColumnOptionTranslations[exp_data_connection.identifier]=null
+ColumnOptionTranslations[exp_data_connection.name]=null
+ColumnOptionTranslations[exp_data_connection.secret]=null
+ColumnOptionTranslations[exp_data_connection.server]=null
+ColumnOptionTranslations[exp_data_connection.user_name]=null
+ColumnOptionTranslations[exp_secret.description]=null
+ColumnOptionTranslations[exp_secret.key_id]=null
+ColumnOptionTranslations[exp_secret.name]=null
+ColumnOptionTranslations[exp_secret.scope]=null
+ColumnOptionTranslations[exp_data_sync.class_name]=null
+ColumnOptionTranslations[exp_data_sync.conflict_rule]=null
+ColumnOptionTranslations[exp_data_sync.content_class]=null
+ColumnOptionTranslations[exp_data_sync.direction]=null
+ColumnOptionTranslations[exp_data_sync.key_columns]=null
+ColumnOptionTranslations[exp_data_sync.name]=null
+ColumnOptionTranslations[exp_data_sync.run_mode]=null
+ColumnOptionTranslations[exp_data_sync.state]=null
+ColumnOptionTranslations[exp_data_sync_conflict.resolution]=null
+ColumnOptionTranslations[exp_data_sync_conflict.row_key]=null
+ColumnOptionTranslations[exp_data_sync_conflict.state]=null
+ColumnOptionTranslations[exp_data_sync_link.content_hash]=null
+ColumnOptionTranslations[exp_data_sync_link.row_hash]=null
+ColumnOptionTranslations[exp_data_sync_link.row_key]=null
+# the signed-in sessions of the users
+ColumnOptionTranslations[expuser_session.browser]=null
+ColumnOptionTranslations[expuser_session.device_type]=null
+ColumnOptionTranslations[expuser_session.end_reason]=null
+ColumnOptionTranslations[expuser_session.first_ip]=null
+ColumnOptionTranslations[expuser_session.last_ip]=null
+ColumnOptionTranslations[expuser_session.method]=null
+ColumnOptionTranslations[expuser_session.os]=null
+ColumnOptionTranslations[expuser_session.siteaccess]=null
+ColumnOptionTranslations[expuser_session.token_hash]=null
+ColumnOptionTranslations[expuser_session.user_agent]=null
+ColumnOptionTranslations[expuser_session_info.auth_detail]=null
+ColumnOptionTranslations[expuser_session_info.country]=null
+ColumnOptionTranslations[expuser_session_info.host]=null
+ColumnOptionTranslations[expuser_session_info.location]=null
+# the user audit log
+ColumnOptionTranslations[expuser_audit.actor_login]=null
+ColumnOptionTranslations[expuser_audit.client_ip]=null
+ColumnOptionTranslations[expuser_audit.event_id]=null
+ColumnOptionTranslations[expuser_audit.event_name]=null
+ColumnOptionTranslations[expuser_audit.host]=null
+ColumnOptionTranslations[expuser_audit.module_view]=null
+ColumnOptionTranslations[expuser_audit.reason]=null
+ColumnOptionTranslations[expuser_audit.request_id]=null
+ColumnOptionTranslations[expuser_audit.result]=null
+ColumnOptionTranslations[expuser_audit.siteaccess]=null
+ColumnOptionTranslations[expuser_audit.target_login]=null
+ColumnOptionTranslations[expuser_audit.target_type]=null
+# help maintained as content
+ColumnOptionTranslations[exphelp_feedback.help_id]=null
+ColumnOptionTranslations[exphelp_feedback.language]=null
+ColumnOptionTranslations[exphelp_feedback.reason]=null
+# the record of exp:upgrade
+ColumnOptionTranslations[expupgrade_step.applied_by]=null
+ColumnOptionTranslations[expupgrade_step.checksum]=null
+ColumnOptionTranslations[expupgrade_step.engine]=null
+ColumnOptionTranslations[expupgrade_step.message]=null
+ColumnOptionTranslations[expupgrade_step.stage]=null
+ColumnOptionTranslations[expupgrade_step.state]=null
+ColumnOptionTranslations[expupgrade_step.version]=null
+# the migration record
+ColumnOptionTranslations[exp_migration.caption_id]=null
+ColumnOptionTranslations[exp_migration.checksum]=null
+ColumnOptionTranslations[exp_migration.engine]=null
+ColumnOptionTranslations[exp_migration.environment]=null
+ColumnOptionTranslations[exp_migration.file_path]=null
+ColumnOptionTranslations[exp_migration.message]=null
+ColumnOptionTranslations[exp_migration.revision]=null
+ColumnOptionTranslations[exp_migration.run_by]=null
+ColumnOptionTranslations[exp_migration.run_id]=null
+ColumnOptionTranslations[exp_migration.stage]=null
+ColumnOptionTranslations[exp_migration.state]=null
+ColumnOptionTranslations[exp_migration.version]=null
+ColumnOptionTranslations[exp_migration_run.caption_post]=null
+ColumnOptionTranslations[exp_migration_run.caption_pre]=null
+ColumnOptionTranslations[exp_migration_run.commit_id]=null
+ColumnOptionTranslations[exp_migration_run.environment]=null
+ColumnOptionTranslations[exp_migration_run.log_file]=null
+ColumnOptionTranslations[exp_migration_run.message]=null
+ColumnOptionTranslations[exp_migration_run.push_state]=null
+ColumnOptionTranslations[exp_migration_run.run_by]=null
+ColumnOptionTranslations[exp_migration_run.state]=null
+ColumnOptionTranslations[exp_migration_run.tag_name]=null
+# the footer wording of a pdf export
+ColumnOptionTranslations[ezpdf_export.footer_text]=null
 
 IndexNameTranslation[ezcontentobject_attribute.ezcontentobject_attribute_contentobject_id]=ezco_attr_co_id
 IndexNameTranslation[ezcontentobject_attribute.ezcontentobject_attribute_co_id_ver_lang_code]=ezco_attr_co_id_ver_lang_code
