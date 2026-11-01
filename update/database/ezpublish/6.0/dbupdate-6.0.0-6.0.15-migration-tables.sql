@@ -2,17 +2,18 @@
 -- Exponential 6.0.15, Oracle: the migration record, exp_migration and exp_migration_run.
 --
 -- One row per migration in exp_migration (the key is its source and id) and one per run in
--- exp_migration_run. exp_migration replaces expupgrade_step: exp:upgrade writes its steps
--- there as migrations of the source "kernel", and the rows expupgrade_step has are copied
--- over (the upgrade step 6.0.15-migration-tables does the same).
+-- exp_migration_run; exp:upgrade writes its steps there as migrations of the source "kernel".
+-- A pre-release of 6.0.15 kept that record in a table of its own, expupgrade_step (no released
+-- version had it): on a database that still has it, its rows are copied over and the table is
+-- dropped at the end of this file (the upgrade step 6.0.15-upgrade-record-table does the same).
 --
 -- Text columns are nullable: Oracle stores an empty string as NULL, so NOT NULL DEFAULT ''
 -- would refuse the rows the kernel writes. Fresh installs get the same from the schema handler
 -- and settings/dbschema.ini.append.php (ColumnOptionTranslations).
 -- Only the keys (source, migration_id, run_id) stay NOT NULL, through their primary keys.
 --
--- Each table is created only when missing, and the copy leaves out a row that exp_migration
--- has already, so the file can run again.
+-- Each table is created only when missing, the copy leaves out a row that exp_migration has
+-- already, and expupgrade_step is dropped only when it exists, so the file can run again.
 --
 -- Run with SQL*Plus or SQLcl as the schema owner.
 --
@@ -77,11 +78,14 @@ END;
 -- The record of expupgrade_step, copied as migrations of the source "kernel": started_at is
 -- worked out from when the step finished and how long it took, and a caption step keeps its
 -- caption id (the step id after "caption:"). Only when expupgrade_step exists; a row
--- exp_migration has already is left out.
+-- exp_migration has already is left out. Then every row of expupgrade_step is checked to be in
+-- exp_migration and the table is dropped; if one is not, the block stops with ORA-20001 and the
+-- table is kept.
 --
 
 DECLARE
     n INTEGER;
+    left_out INTEGER;
 BEGIN
     SELECT COUNT(*) INTO n FROM user_tables WHERE table_name = 'EXPUPGRADE_STEP';
     IF n = 1 THEN
@@ -94,6 +98,13 @@ INSERT INTO exp_migration ( source, migration_id, stage, version, state, started
     FROM expupgrade_step s
    WHERE NOT EXISTS ( SELECT 1 FROM exp_migration m WHERE m.source = ''kernel'' AND m.migration_id = s.step_id )';
         COMMIT;
+        EXECUTE IMMEDIATE '
+SELECT COUNT(*) FROM expupgrade_step s
+ WHERE NOT EXISTS ( SELECT 1 FROM exp_migration m WHERE m.source = ''kernel'' AND m.migration_id = s.step_id )' INTO left_out;
+        IF left_out > 0 THEN
+            RAISE_APPLICATION_ERROR( -20001, left_out || ' row(s) of expupgrade_step are not in exp_migration: expupgrade_step is kept' );
+        END IF;
+        EXECUTE IMMEDIATE 'DROP TABLE expupgrade_step PURGE';
     END IF;
 END;
 /

@@ -35,7 +35,6 @@ class eZOracleKernel6015TablesTest extends TestCase
         'user-sessions'     => array( 'create' => array( 'expuser_session', 'expuser_session_info' ) ),
         'user-audit'        => array( 'create' => array( 'expuser_audit' ) ),
         'help-tables'       => array( 'create' => array( 'exphelp_help_id', 'exphelp_feedback' ) ),
-        'upgrade-steps'     => array( 'create' => array( 'expupgrade_step' ) ),
         'migration-tables'  => array( 'create' => array( 'exp_migration', 'exp_migration_run' ) ),
         'pdf-export-footer' => array( 'columns' => array( 'ezpdf_export' => array( 'show_footer', 'footer_text' ) ) ),
         'rss-opml-podcast'  => array( 'create' => array( 'ezrss_export_opml_item' ),
@@ -96,10 +95,30 @@ class eZOracleKernel6015TablesTest extends TestCase
         $this->assertSame( 14, preg_match_all( '/INSERT INTO ezorder_status .*\n\s+SELECT 1, \'[^\']+\', (\d+) FROM dual WHERE NOT EXISTS \( SELECT 1 FROM ezorder_status WHERE status_id = \1 \);/', $sql ) );
     }
 
-    public function testMigrationRecordCopiesExpupgradeStepOnce()
+    public function testExpupgradeStepIsNeverCreated()
+    {
+        // the pre-release record table: no update creates it and the fresh-install settings do not name it
+        $this->assertSame( '', trim( (string)self::sql( 'upgrade-steps' ) ), 'upgrade-steps is retired and runs nothing' );
+        foreach ( glob( dirname( __DIR__ ) . '/update/database/ezpublish/6.0/dbupdate-6.0.0-6.0.15-*.sql' ) as $file )
+            $this->assertStringNotContainsString( 'CREATE TABLE expupgrade_step', file_get_contents( $file ), basename( $file ) );
+        $this->assertStringNotContainsString( 'expupgrade_step', file_get_contents( dirname( __DIR__ ) . '/settings/dbschema.ini.append.php' ) );
+        $schema = self::kernelSchema();
+        if ( $schema !== null )
+            $this->assertArrayNotHasKey( 'expupgrade_step', $schema, 'the kernel schema has no expupgrade_step' );
+    }
+
+    public function testMigrationRecordCopiesExpupgradeStepOnceThenDropsIt()
     {
         $sql = self::sql( 'migration-tables' );
         $this->assertMatchesRegularExpression( "/table_name = 'EXPUPGRADE_STEP';\s+IF n = 1 THEN\s+EXECUTE IMMEDIATE '\s*INSERT INTO exp_migration/", $sql );
+        // after the copy: every row checked, then dropped, all inside the IF n = 1 of the same block
+        $copy = strpos( $sql, 'INSERT INTO exp_migration' );
+        $check = strpos( $sql, 'SELECT COUNT(*) FROM expupgrade_step s' );
+        $raise = strpos( $sql, 'RAISE_APPLICATION_ERROR( -20001' );
+        $drop = strpos( $sql, "EXECUTE IMMEDIATE 'DROP TABLE expupgrade_step PURGE'" );
+        $this->assertTrue( $copy !== false && $check > $copy && $raise > $check && $drop > $raise, 'copy, check, refuse, drop' );
+        $this->assertSame( 1, substr_count( $sql, 'DROP TABLE expupgrade_step' ) );
+        $this->assertMatchesRegularExpression( "/DROP TABLE expupgrade_step PURGE';\s+END IF;\s+END;\n\//", $sql );
         $this->assertStringContainsString( 'GREATEST( s.applied_at - ROUND( s.duration_ms / 1000 ), 0 )', $sql );
         $this->assertStringContainsString( 'SUBSTR( s.step_id, 9 )', $sql );
         $this->assertStringContainsString( "WHERE NOT EXISTS ( SELECT 1 FROM exp_migration m WHERE m.source = ''kernel'' AND m.migration_id = s.step_id )", $sql );

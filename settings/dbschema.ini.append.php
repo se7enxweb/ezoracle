@@ -202,14 +202,6 @@ ColumnOptionTranslations[expuser_audit.target_type]=null
 ColumnOptionTranslations[exphelp_feedback.help_id]=null
 ColumnOptionTranslations[exphelp_feedback.language]=null
 ColumnOptionTranslations[exphelp_feedback.reason]=null
-# the record of exp:upgrade
-ColumnOptionTranslations[expupgrade_step.applied_by]=null
-ColumnOptionTranslations[expupgrade_step.checksum]=null
-ColumnOptionTranslations[expupgrade_step.engine]=null
-ColumnOptionTranslations[expupgrade_step.message]=null
-ColumnOptionTranslations[expupgrade_step.stage]=null
-ColumnOptionTranslations[expupgrade_step.state]=null
-ColumnOptionTranslations[expupgrade_step.version]=null
 # the migration record
 ColumnOptionTranslations[exp_migration.caption_id]=null
 ColumnOptionTranslations[exp_migration.checksum]=null
