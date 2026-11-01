@@ -12,8 +12,8 @@ UPDATE ezcobj_state_group_language SET real_language_id = language_id - bitand(l
 -- See http://issues.ez.no/19397
 -- Normalize database so that updates to email address automatically affects digest settings
 ALTER TABLE ezgeneral_digest_user_settings ADD user_id integer DEFAULT 0 NOT NULL;
-DELETE FROM ezgeneral_digest_user_settings WHERE address NOT IN (SELECT email FROM ezuser);
-UPDATE ezgeneral_digest_user_settings SET user_id = (SELECT ezuser.contentobject_id
+DELETE FROM ezgeneral_digest_user_settings WHERE NOT EXISTS (SELECT 1 FROM ezuser WHERE ezuser.email = ezgeneral_digest_user_settings.address);
+UPDATE ezgeneral_digest_user_settings SET user_id = (SELECT MIN(ezuser.contentobject_id)
            FROM ezuser WHERE ezuser.email = ezgeneral_digest_user_settings.address);
 CREATE UNIQUE INDEX ezgeneral_digest_user_id ON ezgeneral_digest_user_settings (user_id);
 ALTER TABLE ezgeneral_digest_user_settings DROP COLUMN address;
