@@ -33,9 +33,14 @@ DROP TABLE ezurl_object_link_temp;
 -- Start EZP-21469
 -- While using the public API, ezcontentobject.language_mask was not updated correctly,
 -- the UPDATE statement below fixes that based on the language_mask of the current version.
+-- As in the kernel's files: (o.language_mask & 1) | (v.language_mask & ~1), written with
+-- bitand() alone since the two parts share no bit (this file used to take only bit 0 of
+-- the version's mask, which cleared every language bit, and needed bitor()). MAX() keeps it to one row when the
+-- current version is there twice (no unique key on contentobject_id, version), where a
+-- plain subquery failed with ORA-01427.
 UPDATE ezcontentobject o
-SET language_mask = (
-  SELECT bitor(bitand(o.language_mask, 1), bitand(v.language_mask, 1))
+SET language_mask = bitand(o.language_mask, 1) + (
+  SELECT MAX(v.language_mask - bitand(v.language_mask, 1))
   FROM ezcontentobject_version v
   WHERE o.id = v.contentobject_id AND o.current_version = v.version
 )
