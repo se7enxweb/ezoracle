@@ -189,6 +189,17 @@ class eZOracleDB extends eZDBInterface
                     $this->QuotedColumnNames[] = $name;
             }
         }
+        $types = $get( 'QuotedIdentifierSettings', 'TypeColumnNames', null );
+        if ( is_array( $types ) )
+        {
+            $this->QuotedTypeColumnNames = array();
+            foreach ( $types as $name )
+            {
+                $name = strtolower( trim( $name ) );
+                if ( preg_match( '/^[a-z][a-z0-9_]*$/', $name ) && !in_array( $name, $this->QuotedColumnNames, true ) )
+                    $this->QuotedTypeColumnNames[] = $name;
+            }
+        }
         $this->QuotedColumnPattern = false;
     }
 
@@ -206,25 +217,34 @@ class eZOracleDB extends eZDBInterface
      * (:comment), names inside a longer one (comment_id, t_mode), the keyword uses
      * LOCK TABLE ... IN EXCLUSIVE MODE / SHARE MODE and COMMENT ON ... statements.
      *
+     * The names of [QuotedIdentifierSettings] TypeColumnNames (column names that are
+     * also Oracle data types: number) are quoted the same way, but only in DML
+     * (SELECT, INSERT, UPDATE, DELETE, MERGE, WITH), and not before "(" or after AS:
+     * in DDL and PL/SQL, NUMBER(11,0), CAST( x AS NUMBER ) and DECLARE m NUMBER; the
+     * word is the type. The schema handler quotes such a column in its own DDL.
+     *
      * @param string $sql
      * @return string
      */
     function quoteReservedColumnNames( $sql )
     {
-        if ( !$this->QuotedColumnNames )
+        $all = $this->QuotedColumnNames;
+        if ( $this->QuotedTypeColumnNames && preg_match( '/^\s*\(*\s*(SELECT|INSERT|UPDATE|DELETE|MERGE|WITH)\b/i', $sql ) )
+        {
+            $all = array_merge( $all, $this->QuotedTypeColumnNames );
+        }
+        if ( !$all )
         {
             return $sql;
         }
-        if ( $this->QuotedColumnPattern === false )
-        {
-            $this->QuotedColumnPattern = '/\b(' . implode( '|', $this->QuotedColumnNames ) . ')\b/i';
-        }
+        $pattern = '/\b(' . implode( '|', $all ) . ')\b/i';
         // the quick test, for the statements (nearly all) that have none of the names
-        if ( !preg_match( $this->QuotedColumnPattern, $sql ) || preg_match( '/^\s*(LOCK|COMMENT)\b/i', $sql ) )
+        if ( !preg_match( $pattern, $sql ) || preg_match( '/^\s*(LOCK|COMMENT)\b/i', $sql ) )
         {
             return $sql;
         }
-        $names = implode( '|', $this->QuotedColumnNames );
+        $names = implode( '|', $all );
+        $types = $this->QuotedTypeColumnNames;
         // literals ('it''s'), quoted identifiers, -- and /* */ comments are kept as they are
         $parts = preg_split( '/(\'(?:[^\']|\'\')*\'|"[^"]*"|--[^\n]*|\/\*.*?\*\/)/s', $sql, -1, PREG_SPLIT_DELIM_CAPTURE );
         foreach ( $parts as $i => $part )
@@ -232,11 +252,17 @@ class eZOracleDB extends eZDBInterface
             if ( $i % 2 === 1 || $part === '' )
                 continue;
             $parts[$i] = preg_replace_callback(
-                '/(\b(?:EXCLUSIVE|SHARE)\s+)?(?<![\w$#:])(' . $names . ')(?![\w$#])/i',
-                function ( $m )
+                '/(\b(?:EXCLUSIVE|SHARE|AS)\s+)?(?<![\w$#:])(' . $names . ')(?![\w$#])(\s*\()?/i',
+                function ( $m ) use ( $types )
                 {
+                    $isType = in_array( strtolower( $m[2] ), $types, true );
+                    // a data type: NUMBER(11,0), CAST( x AS NUMBER )
+                    if ( $isType && ( isset( $m[3] ) && $m[3] !== '' || strtoupper( trim( $m[1] ) ) === 'AS' ) )
+                        return $m[0];
                     // IN [ROW] EXCLUSIVE MODE / IN [ROW] SHARE MODE is the keyword
-                    return $m[1] !== '' ? $m[0] : '"' . strtoupper( $m[2] ) . '"';
+                    if ( $m[1] !== '' && strtoupper( trim( $m[1] ) ) !== 'AS' )
+                        return $m[0];
+                    return $m[1] . '"' . strtoupper( $m[2] ) . '"' . ( isset( $m[3] ) ? $m[3] : '' );
                 },
                 $part );
         }
@@ -721,7 +747,8 @@ class eZOracleDB extends eZDBInterface
         // Oracle (ORA-01745), so such a name gets a prefix
         if ( !preg_match( '/^[A-Za-z][A-Za-z0-9_]{0,25}$/', $name ) ||
              ( class_exists( 'eZOracleSchema' ) && in_array( strtolower( $name ), eZOracleSchema::reservedKeywordList() ) ) ||
-             in_array( strtolower( $name ), $this->QuotedColumnNames ) )
+             in_array( strtolower( $name ), $this->QuotedColumnNames ) ||
+             in_array( strtolower( $name ), $this->QuotedTypeColumnNames ) )
         {
             $name = 'ezb_' . substr( preg_replace( '/[^A-Za-z0-9_]/', '_', $name ), 0, 20 ) . count( $this->BindVariableArray );
         }
@@ -2266,6 +2293,9 @@ class eZOracleDB extends eZDBInterface
     // [QuotedIdentifierSettings] ColumnNames: column names that are Oracle reserved
     // words, quoted by quoteReservedColumnNames() in every statement
     public $QuotedColumnNames = array( 'comment', 'mode' );
+    // [QuotedIdentifierSettings] TypeColumnNames: column names that are also Oracle
+    // data types (number), quoted only in DML and never where they are the type
+    public $QuotedTypeColumnNames = array();
     // the regular expression built from them, false when there are none
     public $QuotedColumnPattern = false;
     /// counters of this connection object

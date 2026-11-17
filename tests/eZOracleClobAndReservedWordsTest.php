@@ -116,6 +116,54 @@ class eZOracleClobAndReservedWordsTest extends TestCase
         $this->assertSame( $expected, $this->driver()->quoteReservedColumnNames( $sql ) );
     }
 
+    public static function typeColumnStatements()
+    {
+        return array(
+            // a column named number in DML is quoted
+            array( "SELECT * FROM ticketsystem_ticket WHERE number='TS-2026-00001'", "SELECT * FROM ticketsystem_ticket WHERE \"NUMBER\"='TS-2026-00001'" ),
+            array( 'INSERT INTO ticketsystem_ticket (id, number, prefix) VALUES (:id, :ezb_Number1, :prefix)',
+                   'INSERT INTO ticketsystem_ticket (id, "NUMBER", prefix) VALUES (:id, :ezb_Number1, :prefix)' ),
+            array( 'UPDATE ticketsystem_ticket SET number=:ezb_Number0, status=:status WHERE id=1',
+                   'UPDATE ticketsystem_ticket SET "NUMBER"=:ezb_Number0, status=:status WHERE id=1' ),
+            array( 'SELECT number, comment FROM t ORDER BY number', 'SELECT "NUMBER", "COMMENT" FROM t ORDER BY "NUMBER"' ),
+            // where it is the type it stays
+            array( 'SELECT CAST( x AS NUMBER ), TO_NUMBER( y ), z_number FROM t', 'SELECT CAST( x AS NUMBER ), TO_NUMBER( y ), z_number FROM t' ),
+            array( 'SELECT NUMBER(5) FROM dual', 'SELECT NUMBER(5) FROM dual' ),
+            // DDL and PL/SQL: never quoted (the schema handler quotes the column in its own DDL)
+            array( 'CREATE TABLE t ( id NUMBER(11,0) NOT NULL, n NUMBER DEFAULT 0 )', 'CREATE TABLE t ( id NUMBER(11,0) NOT NULL, n NUMBER DEFAULT 0 )' ),
+            array( 'ALTER TABLE ezurlalias_ml ADD alias_redirects number(11) default 1 NOT NULL', 'ALTER TABLE ezurlalias_ml ADD alias_redirects number(11) default 1 NOT NULL' ),
+            array( "DECLARE m NUMBER; v NUMBER; BEGIN EXECUTE IMMEDIATE 'SELECT 1 FROM dual' INTO m; END;", "DECLARE m NUMBER; v NUMBER; BEGIN EXECUTE IMMEDIATE 'SELECT 1 FROM dual' INTO m; END;" ),
+            array( 'CREATE OR replace FUNCTION bitor( x IN NUMBER, y IN NUMBER ) RETURN NUMBER AS BEGIN RETURN x; END;',
+                   'CREATE OR replace FUNCTION bitor( x IN NUMBER, y IN NUMBER ) RETURN NUMBER AS BEGIN RETURN x; END;' ),
+            // the reserved names as before
+            array( 'LOCK TABLE t IN EXCLUSIVE MODE', 'LOCK TABLE t IN EXCLUSIVE MODE' ),
+            array( 'SELECT x AS comment FROM t', 'SELECT x AS "COMMENT" FROM t' ),
+        );
+    }
+
+    /**
+     * @dataProvider typeColumnStatements
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('typeColumnStatements')]
+    public function testDriverQuotesTypeColumnNamesOnlyWhereTheyAreColumns( $sql, $expected )
+    {
+        $db = $this->driver();
+        $db->QuotedTypeColumnNames = array( 'number' );
+        $this->assertSame( $expected, $db->quoteReservedColumnNames( $sql ) );
+    }
+
+    public function testTypeColumnNamesAreOffByDefault()
+    {
+        $this->assertSame( "SELECT number FROM t", $this->driver()->quoteReservedColumnNames( "SELECT number FROM t" ) );
+    }
+
+    public function testBindVariableNamedByATypeColumnGetsAPrefix()
+    {
+        $db = $this->driver();
+        $db->QuotedTypeColumnNames = array( 'number' );
+        $this->assertSame( ':ezb_Number0', $db->bindVariable( 'x', array( 'name' => 'Number' ) ) );
+    }
+
     public function testBindVariableNamedByAReservedWordGetsAPrefix()
     {
         $db = $this->driver();
