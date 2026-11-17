@@ -10,8 +10,8 @@ setup wizard, the kickstarter and `exp:install --db=oracle` can install onto it.
 
 ## Version
 
-The current version is 2.3.13. The changes of this version are in
-[doc/changelogs/2.3.13.md](doc/changelogs/2.3.13.md), older ones in doc/changelogs/.
+The current version is 2.3.14. The changes of this version are in
+[doc/changelogs/2.3.14.md](doc/changelogs/2.3.14.md), older ones in doc/changelogs/.
 
 ## License
 
