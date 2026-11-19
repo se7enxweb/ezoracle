@@ -270,6 +270,50 @@ class eZOracleDB extends eZDBInterface
     }
 
     /**
+     * Comparisons with the empty string, in the form they have on Oracle.
+     *
+     * Oracle stores '' as NULL, so "column <> ''" and "column = ''" are never true there (a comparison with
+     * NULL is unknown), and on a CLOB column they fail outright with ORA-22848 "cannot use CLOB type as
+     * comparison key". What the SQL written for the other databases means by them is "has a value" and "has
+     * none", which Oracle spells IS NOT NULL and IS NULL:
+     *
+     *   column <> ''  /  column != ''           ->  column IS NOT NULL
+     *   WHERE|AND|OR|ON|WHEN|( column = ''      ->  ... column IS NULL   (never an assignment in SET)
+     *
+     * Only bare column names are rewritten; string literals, quoted identifiers and comments are left alone.
+     *
+     * @param string $sql
+     * @return string
+     */
+    static function rewriteEmptyStringComparisons( $sql )
+    {
+        if ( strpos( $sql, "''" ) === false || !preg_match( '/(<>|!=|=)\s*\'\'/', $sql ) )
+        {
+            return $sql;
+        }
+        // literals ('' included), quoted identifiers and comments at the odd positions, the SQL between them at
+        // the even ones; an empty literal is rewritten together with the comparison that ends the part before it
+        $parts = preg_split( '/(\'(?:[^\']|\'\')*\'|"[^"]*"|--[^\n]*|\/\*.*?\*\/)/s', $sql, -1, PREG_SPLIT_DELIM_CAPTURE );
+        for ( $i = 1; $i < count( $parts ); $i += 2 )
+        {
+            if ( $parts[$i] !== "''" )
+                continue;
+            $before = $parts[$i - 1];
+            if ( preg_match( '/(?<![\w$#."])((?:\w+\.)?\w+)\s*(?:<>|!=)\s*$/', $before, $m ) )
+            {
+                $parts[$i - 1] = substr( $before, 0, -strlen( $m[0] ) ) . $m[1] . ' IS NOT NULL';
+                $parts[$i] = '';
+            }
+            else if ( preg_match( '/(\b(?:WHERE|AND|OR|ON|WHEN)\s+|\(\s*)((?:\w+\.)?\w+)\s*=\s*$/i', $before, $m ) )
+            {
+                $parts[$i - 1] = substr( $before, 0, -strlen( $m[0] ) ) . $m[1] . $m[2] . ' IS NULL';
+                $parts[$i] = '';
+            }
+        }
+        return implode( '', $parts );
+    }
+
+    /**
      * The LOB prefetch size every query gets: ezoracle.ini [PerformanceSettings]
      * LobPrefetch, or php.ini oci8.prefetch_lob_size when that is 0, capped at
      * LOB_PREFETCH_MAX. A larger setting is reported once per process.
@@ -594,6 +638,7 @@ class eZOracleDB extends eZDBInterface
         }
         $this->applyTraceTags();
         $sql = $this->quoteReservedColumnNames( $sql );
+        $sql = self::rewriteEmptyStringComparisons( $sql );
         $isRead =(bool)preg_match( '/^[\s(]*(SELECT|WITH)\b/i', $sql );
         $type = strtoupper( (string)strtok( ltrim( $sql, " \t\r\n(" ), " \t\r\n(" ) );
 
